@@ -19,6 +19,32 @@
             "target": "Momentum4PlayPauseBlock",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlock"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [
+                "--bluetooth-address",
+                "80:C3:BA:82:06:6B"
+            ],
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "name": "Debug Momentum4PlayPauseBlockCLI",
+            "target": "Momentum4PlayPauseBlockCLI",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockCLI"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [
+                "--bluetooth-address",
+                "80:C3:BA:82:06:6B"
+            ],
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "name": "Release Momentum4PlayPauseBlockCLI",
+            "target": "Momentum4PlayPauseBlockCLI",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockCLI"
         }
     ]
 }

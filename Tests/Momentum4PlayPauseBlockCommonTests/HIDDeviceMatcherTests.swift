@@ -1,11 +1,11 @@
 import IOKit.hid
-import Momentum4PlayPauseBlockCore
+import Momentum4PlayPauseBlockCommon
 import Testing
 
 struct HIDDeviceMatcherTests {
     private let matcher = HIDDeviceMatcher()
     private let target = BluetoothDeviceSnapshot(
-        address: .defaultMomentum4,
+        address: BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!,
         name: "MOMENTUM 4",
         isConnected: true
     )

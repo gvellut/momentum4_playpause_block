@@ -1,5 +1,5 @@
 import AppKit
-import Momentum4PlayPauseBlockCore
+import Momentum4PlayPauseBlockAppSupport
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var launchContext = AppLaunchContext(launchedAsLoginItem: false)

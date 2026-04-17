@@ -1,4 +1,4 @@
-import Momentum4PlayPauseBlockCore
+import Momentum4PlayPauseBlockCommon
 import Testing
 
 struct BluetoothAddressTests {

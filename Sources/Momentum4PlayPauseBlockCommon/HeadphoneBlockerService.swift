@@ -31,9 +31,9 @@ public enum BlockerStatus: Equatable, Sendable {
 
 public struct BlockerConfiguration: Equatable, Sendable {
     public let isEnabled: Bool
-    public let targetAddress: BluetoothAddress
+    public let targetAddress: BluetoothAddress?
 
-    public init(isEnabled: Bool, targetAddress: BluetoothAddress) {
+    public init(isEnabled: Bool, targetAddress: BluetoothAddress? = nil) {
         self.isEnabled = isEnabled
         self.targetAddress = targetAddress
     }
@@ -65,7 +65,7 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         self.matcher = matcher
         self.configuration = BlockerConfiguration(
             isEnabled: false,
-            targetAddress: .defaultMomentum4
+            targetAddress: nil
         )
 
         let matchingDictionary: [String: Any] = [
@@ -100,13 +100,20 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             return
         }
 
+        guard let targetAddress = configuration.targetAddress else {
+            releaseAllSeizedDevices()
+            closeManagerIfNeeded()
+            publishStatus(.error("No Bluetooth address is configured for blocking."))
+            return
+        }
+
         guard openManagerIfNeeded() else {
             releaseAllSeizedDevices()
             publishStatus(.error("The HID manager could not be opened."))
             return
         }
 
-        refreshMatches()
+        refreshMatches(targetAddress: targetAddress)
     }
 
     private func ensureListenPermission() -> Bool {
@@ -149,8 +156,8 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         managerIsOpen = false
     }
 
-    private func refreshMatches() {
-        guard let targetDevice = bluetoothResolver.resolve(address: configuration.targetAddress) else {
+    private func refreshMatches(targetAddress: BluetoothAddress) {
+        guard let targetDevice = bluetoothResolver.resolve(address: targetAddress) else {
             releaseAllSeizedDevices()
             publishStatus(.waitingForTarget("The configured Bluetooth address is unknown to macOS. Pair or connect the headset first."))
             return

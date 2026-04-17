@@ -4,11 +4,10 @@
         {
             "label": "swift: Build Debug Momentum4PlayPauseBlock",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
             "args": [
-                "build",
-                "--product",
-                "Momentum4PlayPauseBlock"
+                "Momentum4PlayPauseBlock",
+                "debug"
             ],
             "group": "build",
             "problemMatcher": [
@@ -18,13 +17,34 @@
         {
             "label": "swift: Build Release Momentum4PlayPauseBlock",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
             "args": [
-                "build",
-                "-c",
-                "release",
-                "--product",
-                "Momentum4PlayPauseBlock"
+                "Momentum4PlayPauseBlock",
+                "release"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Build Debug Momentum4PlayPauseBlockCLI",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
+            "args": [
+                "Momentum4PlayPauseBlockCLI",
+                "debug"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Build Release Momentum4PlayPauseBlockCLI",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
+            "args": [
+                "Momentum4PlayPauseBlockCLI",
+                "release"
             ],
             "problemMatcher": [
                 "$swift"
@@ -59,10 +79,25 @@
         {
             "label": "swift: Run Momentum4PlayPauseBlock",
             "type": "shell",
-            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "command": "${workspaceFolder}/scripts/run-signed-product.sh",
             "args": [
-                "run",
-                "Momentum4PlayPauseBlock"
+                "Momentum4PlayPauseBlock",
+                "debug"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Run Momentum4PlayPauseBlockCLI",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/run-signed-product.sh",
+            "args": [
+                "Momentum4PlayPauseBlockCLI",
+                "debug",
+                "--",
+                "--bluetooth-address",
+                "80:C3:BA:82:06:6B"
             ],
             "problemMatcher": [
                 "$swift"

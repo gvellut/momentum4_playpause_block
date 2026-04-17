@@ -1,11 +1,19 @@
 import Combine
 import Foundation
+import Momentum4PlayPauseBlockCommon
 
 @MainActor
 public final class AppSettingsStore: ObservableObject {
     @Published public var blockingEnabled: Bool {
         didSet {
             guard !suppressSideEffects, oldValue != blockingEnabled else {
+                return
+            }
+
+            guard !blockingEnabled || canEnableBlocking else {
+                setBlockingEnabledWithoutSideEffects(false)
+                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+                applyBlockerConfiguration()
                 return
             }
 
@@ -41,12 +49,26 @@ public final class AppSettingsStore: ObservableObject {
             }
 
             defaults.set(targetBluetoothAddress, forKey: AppSettingsKeys.targetBluetoothAddress)
+
+            if blockingEnabled && !canEnableBlocking {
+                setBlockingEnabledWithoutSideEffects(false)
+                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            }
+
             applyBlockerConfiguration()
         }
     }
 
     @Published public private(set) var blockerStatus: BlockerStatus = .disabled
     @Published public private(set) var launchAtLoginStatus: LaunchAtLoginStatus
+
+    public var canEnableBlocking: Bool {
+        configuredTargetBluetoothAddress != nil
+    }
+
+    public var configuredTargetBluetoothAddress: BluetoothAddress? {
+        BluetoothAddress(normalizing: targetBluetoothAddress)
+    }
 
     private let defaults: UserDefaults
     private let blocker: HeadphoneBlockerControlling
@@ -62,15 +84,20 @@ public final class AppSettingsStore: ObservableObject {
         self.blocker = blocker ?? HeadphoneBlockerService()
         self.launchAtLoginController = launchAtLoginController ?? LaunchAtLoginController()
 
-        let storedAddress = defaults.string(forKey: AppSettingsKeys.targetBluetoothAddress)
-        let initialAddress = BluetoothAddress(normalizing: storedAddress ?? "")
-            ?? .defaultMomentum4
+        let storedAddress = BluetoothAddress.sanitizeUserEntry(
+            defaults.string(forKey: AppSettingsKeys.targetBluetoothAddress) ?? ""
+        )
+        let storedBlockingEnabled = defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool ?? false
 
-        self.blockingEnabled = defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool ?? true
+        self.targetBluetoothAddress = storedAddress
+        self.blockingEnabled = storedBlockingEnabled && BluetoothAddress(normalizing: storedAddress) != nil
         self.showMenuBarIcon = defaults.object(forKey: AppSettingsKeys.showMenuBarIcon) as? Bool ?? true
         self.openAtLogin = defaults.object(forKey: AppSettingsKeys.openAtLogin) as? Bool ?? false
-        self.targetBluetoothAddress = initialAddress.rawValue
         self.launchAtLoginStatus = self.launchAtLoginController.currentStatus()
+
+        if self.blockingEnabled != storedBlockingEnabled {
+            defaults.set(self.blockingEnabled, forKey: AppSettingsKeys.blockingEnabled)
+        }
 
         self.blocker.statusDidChange = { [weak self] status in
             Task { @MainActor in
@@ -110,13 +137,10 @@ public final class AppSettingsStore: ObservableObject {
         showMenuBarIcon = true
     }
 
-    public func updateTargetBluetoothAddress(from draft: String) -> Bool {
-        guard let address = BluetoothAddress(normalizing: draft) else {
-            return false
-        }
-
-        targetBluetoothAddress = address.rawValue
-        return true
+    @discardableResult
+    public func updateTargetBluetoothAddressDraft(_ draft: String) -> Bool {
+        targetBluetoothAddress = BluetoothAddress.sanitizeUserEntry(draft)
+        return canEnableBlocking
     }
 
     public func sanitizedTargetBluetoothAddressDraft(_ draft: String) -> String {
@@ -124,15 +148,21 @@ public final class AppSettingsStore: ObservableObject {
     }
 
     public func targetBluetoothAddressValidationMessage(for draft: String) -> String {
-        if let normalized = BluetoothAddress(normalizing: draft) {
-            if normalized.rawValue == targetBluetoothAddress {
-                return "Using \(normalized.rawValue) as the target headset address."
-            }
+        let sanitizedDraft = BluetoothAddress.sanitizeUserEntry(draft)
 
-            return "The blocker will switch to \(normalized.rawValue) as soon as you finish editing."
+        guard !sanitizedDraft.isEmpty else {
+            return "Enter a Bluetooth address to enable blocking."
         }
 
-        return "The blocker keeps using the last valid address: \(targetBluetoothAddress)."
+        if let normalized = BluetoothAddress(normalizing: sanitizedDraft) {
+            if normalized.rawValue == targetBluetoothAddress {
+                return "Blocking can be enabled for \(normalized.rawValue)."
+            }
+
+            return "The blocker will use \(normalized.rawValue) once you enable it."
+        }
+
+        return "Enter a full Bluetooth address like 80:C3:BA:82:06:6B."
     }
 
     public func openLoginItemsSystemSettings() {
@@ -140,11 +170,10 @@ public final class AppSettingsStore: ObservableObject {
     }
 
     private func applyBlockerConfiguration() {
-        let address = BluetoothAddress(normalizing: targetBluetoothAddress) ?? .defaultMomentum4
         blocker.apply(
             configuration: BlockerConfiguration(
-                isEnabled: blockingEnabled,
-                targetAddress: address
+                isEnabled: blockingEnabled && canEnableBlocking,
+                targetAddress: configuredTargetBluetoothAddress
             )
         )
     }
@@ -167,6 +196,12 @@ public final class AppSettingsStore: ObservableObject {
             defaults.set(!requestedEnabled, forKey: AppSettingsKeys.openAtLogin)
             return
         }
+    }
+
+    private func setBlockingEnabledWithoutSideEffects(_ value: Bool) {
+        suppressSideEffects = true
+        blockingEnabled = value
+        suppressSideEffects = false
     }
 
     private func setOpenAtLoginWithoutSideEffects(_ value: Bool) {

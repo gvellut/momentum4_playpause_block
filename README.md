@@ -23,9 +23,7 @@ The settings apply immediately.
 - `Open at Login`
 - `Target Bluetooth Address`
 
-The target Bluetooth address is advanced configuration. By default it is set to:
-
-`80:C3:BA:82:06:6B`
+The target Bluetooth address is required before blocking can be enabled. On first launch, the app opens Preferences with blocking turned off and no device configured yet.
 
 ## Permissions
 
@@ -78,11 +76,24 @@ dist/Momentum4PlayPauseBlock.app
 Useful command-line workflows:
 
 ```bash
-./scripts/swift-package.sh build --product Momentum4PlayPauseBlock
-./scripts/swift-package.sh run Momentum4PlayPauseBlock
+./scripts/sign-built-product.sh Momentum4PlayPauseBlock debug
+./scripts/run-signed-product.sh Momentum4PlayPauseBlock debug
+./scripts/sign-built-product.sh Momentum4PlayPauseBlockCLI debug
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --bluetooth-address 80:C3:BA:82:06:6B
 ./scripts/swift-package.sh test
 ./scripts/build-app.sh
 ```
+
+### CLI Tool
+
+The repo also includes a foreground CLI tool named `Momentum4PlayPauseBlockCLI`.
+
+- It blocks the configured Bluetooth headset while the process is running.
+- It does not share settings with the menu bar app.
+- It requires the same HID/Input Monitoring permission, but the permission is granted to the terminal app that launches it.
+- For development builds, use the signed build and run scripts so recompiles keep the same code identity in macOS.
+
+Developer docs for the CLI are in [docs/cli.md](/Users/guilhem/Documents/projects/github/momentum4_playpause_block/docs/cli.md:1).
 
 ### Signing
 
@@ -91,6 +102,8 @@ The packaging script signs the app with:
 ```text
 My Swift Dev Cert
 ```
+
+The VS Code build tasks now sign the debug and release executables with the same certificate, so a rebuild does not turn them back into a new unsigned binary from macOS's point of view.
 
 Override it if needed:
 
@@ -106,5 +119,7 @@ VS Code tasks are included for:
 
 - Building the app target
 - Running the app target
+- Building the CLI target
+- Running the CLI target
 - Running the package test suite
 - Building the signed `.app` bundle

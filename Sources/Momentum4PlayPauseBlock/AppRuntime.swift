@@ -1,4 +1,4 @@
-import Momentum4PlayPauseBlockCore
+import Momentum4PlayPauseBlockAppSupport
 
 @MainActor
 enum AppRuntime {

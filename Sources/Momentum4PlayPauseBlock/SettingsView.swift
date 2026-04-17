@@ -1,4 +1,4 @@
-import Momentum4PlayPauseBlockCore
+import Momentum4PlayPauseBlockAppSupport
 import SwiftUI
 
 struct SettingsView: View {
@@ -14,10 +14,17 @@ struct SettingsView: View {
         Form {
             Section {
                 Toggle("Enable / disable block", isOn: $settingsStore.blockingEnabled)
+                    .disabled(!settingsStore.canEnableBlocking)
 
                 Text(settingsStore.blockerStatus.message)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                if !settingsStore.canEnableBlocking {
+                    Text("Enter a full Bluetooth address below before blocking can be enabled.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
 
                 Toggle("Show / Hide icon in menubar", isOn: $settingsStore.showMenuBarIcon)
 
@@ -46,7 +53,7 @@ struct SettingsView: View {
                             return
                         }
 
-                        _ = settingsStore.updateTargetBluetoothAddress(from: sanitized)
+                        _ = settingsStore.updateTargetBluetoothAddressDraft(sanitized)
                     }
 
                 Text(settingsStore.targetBluetoothAddressValidationMessage(for: targetAddressDraft))
@@ -58,7 +65,7 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 460)
         .onChange(of: settingsStore.targetBluetoothAddress) { _, newValue in
-            if BluetoothAddress.normalizeComparable(targetAddressDraft) != BluetoothAddress.normalizeComparable(newValue) {
+            if targetAddressDraft != newValue {
                 targetAddressDraft = newValue
             }
         }

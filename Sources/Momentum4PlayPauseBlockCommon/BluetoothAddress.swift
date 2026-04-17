@@ -1,8 +1,6 @@
 import Foundation
 
 public struct BluetoothAddress: Equatable, Hashable, Sendable, CustomStringConvertible {
-    public static let defaultMomentum4 = BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!
-
     public let rawValue: String
 
     public var description: String {
