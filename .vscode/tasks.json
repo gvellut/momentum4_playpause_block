@@ -1,0 +1,92 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "swift: Build Debug Momentum4PlayPauseBlock",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "args": [
+                "build",
+                "--product",
+                "Momentum4PlayPauseBlock"
+            ],
+            "group": "build",
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Build Release Momentum4PlayPauseBlock",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "args": [
+                "build",
+                "-c",
+                "release",
+                "--product",
+                "Momentum4PlayPauseBlock"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Build Debug Tests",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "args": [
+                "build",
+                "--build-tests"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Build Release Tests",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "args": [
+                "build",
+                "-c",
+                "release",
+                "--build-tests"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Run Momentum4PlayPauseBlock",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "args": [
+                "run",
+                "Momentum4PlayPauseBlock"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Test Momentum4PlayPauseBlock",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/swift-package.sh",
+            "args": [
+                "test"
+            ],
+            "problemMatcher": [
+                "$swift"
+            ]
+        },
+        {
+            "label": "swift: Build Signed App Bundle",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/build-app.sh",
+            "group": "build",
+            "problemMatcher": [
+                "$swift"
+            ]
+        }
+    ]
+}

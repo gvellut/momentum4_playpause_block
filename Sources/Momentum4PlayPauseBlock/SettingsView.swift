@@ -1,0 +1,66 @@
+import Momentum4PlayPauseBlockCore
+import SwiftUI
+
+struct SettingsView: View {
+    @ObservedObject var settingsStore: AppSettingsStore
+    @State private var targetAddressDraft: String
+
+    init(settingsStore: AppSettingsStore) {
+        self.settingsStore = settingsStore
+        _targetAddressDraft = State(initialValue: settingsStore.targetBluetoothAddress)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Enable / disable block", isOn: $settingsStore.blockingEnabled)
+
+                Text(settingsStore.blockerStatus.message)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Show / Hide icon in menubar", isOn: $settingsStore.showMenuBarIcon)
+
+                Toggle("Open at Login", isOn: $settingsStore.openAtLogin)
+
+                if let message = settingsStore.launchAtLoginStatus.message {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                if settingsStore.launchAtLoginStatus.showsSystemSettingsButton {
+                    Button("Open Login Items Settings") {
+                        settingsStore.openLoginItemsSystemSettings()
+                    }
+                }
+            }
+
+            Section("Advanced") {
+                TextField("Target Bluetooth Address", text: $targetAddressDraft)
+                    .font(.system(.body, design: .monospaced))
+                    .onChange(of: targetAddressDraft) { _, newValue in
+                        let sanitized = settingsStore.sanitizedTargetBluetoothAddressDraft(newValue)
+                        if sanitized != newValue {
+                            targetAddressDraft = sanitized
+                            return
+                        }
+
+                        _ = settingsStore.updateTargetBluetoothAddress(from: sanitized)
+                    }
+
+                Text(settingsStore.targetBluetoothAddressValidationMessage(for: targetAddressDraft))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(20)
+        .frame(width: 460)
+        .onChange(of: settingsStore.targetBluetoothAddress) { _, newValue in
+            if BluetoothAddress.normalizeComparable(targetAddressDraft) != BluetoothAddress.normalizeComparable(newValue) {
+                targetAddressDraft = newValue
+            }
+        }
+    }
+}
