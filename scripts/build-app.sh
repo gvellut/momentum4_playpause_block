@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Momentum4PlayPauseBlock"
-BUNDLE_IDENTIFIER="com.guilhem.momentum4playpauseblock"
+BUNDLE_IDENTIFIER="com.vellut.momentum4playpauseblock"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-My Swift Dev Cert}"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"

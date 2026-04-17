@@ -6,25 +6,38 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE_CACHE_PATH="$ROOT_DIR/.build/module-cache"
 CLANG_CACHE_PATH="$ROOT_DIR/.build/clang-cache"
 SWIFTPM_CACHE_PATH="$ROOT_DIR/.build/swiftpm-cache"
+CLT_SDK_DIR="/Library/Developer/CommandLineTools/SDKs"
 
 mkdir -p "$MODULE_CACHE_PATH" "$CLANG_CACHE_PATH" "$SWIFTPM_CACHE_PATH"
 
-SDKROOT_CANDIDATE=""
-for candidate in \
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX26.2.sdk" \
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk" \
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk" \
-    "/Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk"
-do
-    if [[ -d "$candidate" ]]; then
-        SDKROOT_CANDIDATE="$candidate"
-        break
+resolve_sdkroot() {
+    if [[ -n "${SDKROOT:-}" && -d "$SDKROOT" ]]; then
+        printf '%s\n' "$SDKROOT"
+        return
     fi
-done
 
-if [[ -z "$SDKROOT_CANDIDATE" ]]; then
-    SDKROOT_CANDIDATE="$(xcrun --sdk macosx --show-sdk-path)"
-fi
+    if [[ -d "$CLT_SDK_DIR" ]]; then
+        local best_candidate=""
+
+        while IFS= read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            best_candidate="$candidate"
+            break
+        done < <(
+            find "$CLT_SDK_DIR" -maxdepth 1 -type d -name 'MacOSX*.sdk' -print \
+                | sort -V -r
+        )
+
+        if [[ -n "$best_candidate" ]]; then
+            printf '%s\n' "$best_candidate"
+            return
+        fi
+    fi
+
+    xcrun --sdk macosx --show-sdk-path
+}
+
+SDKROOT_CANDIDATE="$(resolve_sdkroot)"
 
 if [[ $# -lt 1 ]]; then
     echo "usage: $0 <swift-subcommand> [arguments...]" >&2

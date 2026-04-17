@@ -5,7 +5,7 @@ import PackageDescription
 let package = Package(
     name: "Momentum4PlayPauseBlock",
     platforms: [
-        .macOS(.v15),
+        .macOS(.v15)
     ],
     products: [
         .executable(
@@ -18,7 +18,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-testing.git", exact: "6.2.3"),
+        .package(url: "https://github.com/swiftlang/swift-testing.git", exact: "6.2.3")
     ],
     targets: [
         .target(
