@@ -27,15 +27,6 @@ case "$CONFIGURATION" in
         ;;
 esac
 
-if ! security find-identity -v -p codesigning | grep -F "\"$SIGNING_IDENTITY\"" >/dev/null; then
-    cat >&2 <<EOF
-Configured signing identity "$SIGNING_IDENTITY" was not found.
-
-Create or import the certificate first, or rerun with:
-  SIGNING_IDENTITY="Your Certificate Name" ./scripts/sign-built-product.sh "$PRODUCT_NAME" "$CONFIGURATION"
-EOF
-    exit 1
-fi
 
 BUILD_ARGS=(build --product "$PRODUCT_NAME")
 SHOW_BIN_ARGS=(build --show-bin-path)

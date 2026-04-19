@@ -16,9 +16,11 @@ public enum BlockerStatus: Equatable, Sendable {
         case .disabled:
             return "Blocking is disabled."
         case .requestingPermission:
-            return "macOS is requesting Input Monitoring permission so the app can inspect HID media events."
+            return
+                "macOS is requesting Input Monitoring permission so the app can inspect HID media events."
         case .permissionDenied:
-            return "Input Monitoring permission is required. Allow the app in System Settings > Privacy & Security > Input Monitoring."
+            return
+                "Input Monitoring permission is required. Allow the app in System Settings > Privacy & Security > Input Monitoring."
         case .waitingForTarget(let message):
             return message
         case .blocking(let deviceName):
@@ -78,7 +80,8 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceMatchingCallback(manager, Self.deviceMatchingCallback, context)
         IOHIDManagerRegisterDeviceRemovalCallback(manager, Self.deviceRemovalCallback, context)
-        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        IOHIDManagerScheduleWithRunLoop(
+            manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
     }
 
     public func apply(configuration: BlockerConfiguration) {
@@ -159,19 +162,26 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
     private func refreshMatches(targetAddress: BluetoothAddress) {
         guard let targetDevice = bluetoothResolver.resolve(address: targetAddress) else {
             releaseAllSeizedDevices()
-            publishStatus(.waitingForTarget("The configured Bluetooth address is unknown to macOS. Pair or connect the headset first."))
+            publishStatus(
+                .waitingForTarget(
+                    "The configured Bluetooth address is unknown to macOS. Pair or connect the headset first."
+                ))
             return
         }
 
         guard targetDevice.isConnected else {
             releaseAllSeizedDevices()
-            publishStatus(.waitingForTarget("The configured headset is known, but it is not currently connected."))
+            publishStatus(
+                .waitingForTarget(
+                    "The configured headset is known, but it is not currently connected."))
             return
         }
 
         guard let rawDevices = IOHIDManagerCopyDevices(manager) else {
             releaseAllSeizedDevices()
-            publishStatus(.waitingForTarget("No Bluetooth consumer-control HID devices are currently available."))
+            publishStatus(
+                .waitingForTarget(
+                    "No Bluetooth consumer-control HID devices are currently available."))
             return
         }
 
@@ -179,6 +189,13 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         var matchingServiceIDs = Set<io_service_t>()
 
         for device in devices {
+            var deviceName = "Unknown Device"
+            if let nameRef = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) {
+                deviceName = nameRef as! String
+            }
+
+            print("Found Media Controller: \(deviceName)")
+
             let snapshot = HIDDeviceSnapshot(device: device)
             let matchResult = matcher.match(device: snapshot, target: targetDevice)
             guard case .matched = matchResult else {
@@ -201,7 +218,8 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         }
 
         if let device = seizedDevices.values.first {
-            let deviceName = HIDDeviceSnapshot(device: device).product
+            let deviceName =
+                HIDDeviceSnapshot(device: device).product
                 ?? targetDevice.name
                 ?? targetDevice.address.rawValue
             publishStatus(.blocking(deviceName))

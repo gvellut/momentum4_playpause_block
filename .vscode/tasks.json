@@ -77,33 +77,6 @@
             ]
         },
         {
-            "label": "swift: Run Momentum4PlayPauseBlock",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/run-signed-product.sh",
-            "args": [
-                "Momentum4PlayPauseBlock",
-                "debug"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
-            "label": "swift: Run Momentum4PlayPauseBlockCLI",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/run-signed-product.sh",
-            "args": [
-                "Momentum4PlayPauseBlockCLI",
-                "debug",
-                "--",
-                "--bluetooth-address",
-                "80:C3:BA:82:06:6B"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
             "label": "swift: Test Momentum4PlayPauseBlock",
             "type": "shell",
             "command": "${workspaceFolder}/scripts/swift-package.sh",
