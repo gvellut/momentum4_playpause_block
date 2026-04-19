@@ -68,7 +68,7 @@ final class CLIApplication {
 
     func start() {
         writeLine(
-            "Blocking consumer-control events for \(arguments.bluetoothAddress.rawValue). Press Control-C to stop."
+            "Blocking consumer-control events for \(arguments.startupDescription). Press Control-C to stop."
         )
 
         blocker.statusDidChange = { [weak self] status in
@@ -80,7 +80,7 @@ final class CLIApplication {
         blocker.apply(
             configuration: BlockerConfiguration(
                 isEnabled: true,
-                targetAddress: arguments.bluetoothAddress
+                target: arguments.target
             )
         )
     }
@@ -108,7 +108,7 @@ final class CLIApplication {
         blocker.apply(
             configuration: BlockerConfiguration(
                 isEnabled: false,
-                targetAddress: arguments.bluetoothAddress
+                target: arguments.target
             )
         )
         finish(.success)

@@ -4,6 +4,13 @@
 
 It uses the same HID blocking code as the menu bar app, but it does not use the app's `UserDefaults`, menu bar UI, or Login Item support.
 
+Choose exactly one target mode when you run it:
+
+- `--bluetooth-address <id>`
+- `--generic-audio-headset`
+
+Those two flags are mutually exclusive.
+
 ## Permissions
 
 The CLI also needs macOS permission to inspect HID media events.
@@ -52,6 +59,12 @@ Run the signed development binary:
 ./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --bluetooth-address 80:C3:BA:82:06:6B
 ```
 
+Or run it against the generic `Audio / Headset` endpoint:
+
+```bash
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --generic-audio-headset
+```
+
 The CLI stays in the foreground and keeps watching for the matching HID endpoint. Stop it with `Control-C`.
 
 If the device is not connected yet, the CLI stays alive and waits until the headset appears.
@@ -68,6 +81,12 @@ Then run the binary directly:
 
 ```bash
 <bin-path>/Momentum4PlayPauseBlockCLI --bluetooth-address 80:C3:BA:82:06:6B
+```
+
+Or:
+
+```bash
+<bin-path>/Momentum4PlayPauseBlockCLI --generic-audio-headset
 ```
 
 For repeat use outside development, a release build is the better default.

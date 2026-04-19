@@ -8,18 +8,24 @@ struct CLIArgumentParserTests {
     @Test
     func parsesNamedBluetoothAddressArgument() throws {
         let parsed = try parser.parse(["--bluetooth-address", "80:C3:BA:82:06:6B"])
-        #expect(parsed.bluetoothAddress.rawValue == "80:C3:BA:82:06:6B")
+        #expect(parsed.target == .bluetoothAddress(BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!))
     }
 
     @Test
     func parsesEqualsSeparatedBluetoothAddressArgument() throws {
         let parsed = try parser.parse(["--bluetooth-address=80-c3-ba-82-06-6b"])
-        #expect(parsed.bluetoothAddress.rawValue == "80:C3:BA:82:06:6B")
+        #expect(parsed.target == .bluetoothAddress(BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!))
     }
 
     @Test
-    func rejectsMissingBluetoothAddress() {
-        #expect(throws: CLIArgumentParserError.missingBluetoothAddress) {
+    func parsesGenericAudioHeadsetFlag() throws {
+        let parsed = try parser.parse(["--generic-audio-headset"])
+        #expect(parsed.target == .genericAudioHeadset)
+    }
+
+    @Test
+    func rejectsMissingTarget() {
+        #expect(throws: CLIArgumentParserError.missingTarget) {
             try parser.parse([])
         }
     }
@@ -35,6 +41,15 @@ struct CLIArgumentParserTests {
     func supportsHelpFlag() {
         #expect(throws: CLIArgumentParserError.helpRequested) {
             try parser.parse(["--help"])
+        }
+    }
+
+    @Test
+    func rejectsConflictingTargetFlags() {
+        #expect(throws: CLIArgumentParserError.conflictingTargetFlags) {
+            try parser.parse([
+                "--bluetooth-address", "80:C3:BA:82:06:6B", "--generic-audio-headset",
+            ])
         }
     }
 }

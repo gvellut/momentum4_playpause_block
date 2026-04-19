@@ -20,7 +20,7 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                if !settingsStore.canEnableBlocking {
+                if !settingsStore.canEnableBlocking && !settingsStore.useGenericAudioHeadsetTarget {
                     Text("Enter a full Bluetooth address below before blocking can be enabled.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -44,8 +44,14 @@ struct SettingsView: View {
             }
 
             Section("Advanced") {
+                Toggle(
+                    "Use generic Audio / Headset target",
+                    isOn: $settingsStore.useGenericAudioHeadsetTarget
+                )
+
                 TextField("Target Bluetooth Address", text: $targetAddressDraft)
                     .font(.system(.body, design: .monospaced))
+                    .disabled(settingsStore.useGenericAudioHeadsetTarget)
                     .onChange(of: targetAddressDraft) { _, newValue in
                         let sanitized = settingsStore.sanitizedTargetBluetoothAddressDraft(newValue)
                         if sanitized != newValue {
@@ -59,6 +65,29 @@ struct SettingsView: View {
                 Text(settingsStore.targetBluetoothAddressValidationMessage(for: targetAddressDraft))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                Button("Check") {
+                    settingsStore.runTargetCheck()
+                }
+                .disabled(settingsStore.selectedTarget == nil)
+
+                if let checkResult = settingsStore.targetCheckResult {
+                    Text(checkResult.message)
+                        .font(.footnote)
+                        .foregroundStyle(checkResult.isMatchFound ? .primary : .secondary)
+
+                    if let matchedDevice = checkResult.matchedDevice {
+                        Text(matchedDevice.displaySummary)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    ForEach(checkResult.rejectionMessages, id: \.self) { rejection in
+                        Text(rejection)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .formStyle(.grouped)

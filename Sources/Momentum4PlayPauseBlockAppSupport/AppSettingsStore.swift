@@ -42,6 +42,27 @@ public final class AppSettingsStore: ObservableObject {
         }
     }
 
+    @Published public var useGenericAudioHeadsetTarget: Bool {
+        didSet {
+            guard !suppressSideEffects, oldValue != useGenericAudioHeadsetTarget else {
+                return
+            }
+
+            defaults.set(
+                useGenericAudioHeadsetTarget,
+                forKey: AppSettingsKeys.useGenericAudioHeadsetTarget
+            )
+            targetCheckResult = nil
+
+            if blockingEnabled && !canEnableBlocking {
+                setBlockingEnabledWithoutSideEffects(false)
+                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            }
+
+            applyBlockerConfiguration()
+        }
+    }
+
     @Published public private(set) var targetBluetoothAddress: String {
         didSet {
             guard !suppressSideEffects, oldValue != targetBluetoothAddress else {
@@ -49,6 +70,7 @@ public final class AppSettingsStore: ObservableObject {
             }
 
             defaults.set(targetBluetoothAddress, forKey: AppSettingsKeys.targetBluetoothAddress)
+            targetCheckResult = nil
 
             if blockingEnabled && !canEnableBlocking {
                 setBlockingEnabledWithoutSideEffects(false)
@@ -61,13 +83,22 @@ public final class AppSettingsStore: ObservableObject {
 
     @Published public private(set) var blockerStatus: BlockerStatus = .disabled
     @Published public private(set) var launchAtLoginStatus: LaunchAtLoginStatus
+    @Published public private(set) var targetCheckResult: BlockerCheckResult?
 
     public var canEnableBlocking: Bool {
-        configuredTargetBluetoothAddress != nil
+        useGenericAudioHeadsetTarget || configuredTargetBluetoothAddress != nil
     }
 
     public var configuredTargetBluetoothAddress: BluetoothAddress? {
         BluetoothAddress(normalizing: targetBluetoothAddress)
+    }
+
+    public var selectedTarget: BlockerTarget? {
+        if useGenericAudioHeadsetTarget {
+            return .genericAudioHeadset
+        }
+
+        return configuredTargetBluetoothAddress.map(BlockerTarget.bluetoothAddress)
     }
 
     private let defaults: UserDefaults
@@ -87,10 +118,15 @@ public final class AppSettingsStore: ObservableObject {
         let storedAddress = BluetoothAddress.sanitizeUserEntry(
             defaults.string(forKey: AppSettingsKeys.targetBluetoothAddress) ?? ""
         )
+        let storedUseGenericTarget =
+            defaults.object(forKey: AppSettingsKeys.useGenericAudioHeadsetTarget) as? Bool ?? false
         let storedBlockingEnabled = defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool ?? false
 
         self.targetBluetoothAddress = storedAddress
-        self.blockingEnabled = storedBlockingEnabled && BluetoothAddress(normalizing: storedAddress) != nil
+        self.useGenericAudioHeadsetTarget = storedUseGenericTarget
+        self.blockingEnabled =
+            storedBlockingEnabled
+            && (storedUseGenericTarget || BluetoothAddress(normalizing: storedAddress) != nil)
         self.showMenuBarIcon = defaults.object(forKey: AppSettingsKeys.showMenuBarIcon) as? Bool ?? true
         self.openAtLogin = defaults.object(forKey: AppSettingsKeys.openAtLogin) as? Bool ?? false
         self.launchAtLoginStatus = self.launchAtLoginController.currentStatus()
@@ -148,6 +184,10 @@ public final class AppSettingsStore: ObservableObject {
     }
 
     public func targetBluetoothAddressValidationMessage(for draft: String) -> String {
+        if useGenericAudioHeadsetTarget {
+            return "Generic Audio / Headset mode ignores the Bluetooth address field."
+        }
+
         let sanitizedDraft = BluetoothAddress.sanitizeUserEntry(draft)
 
         guard !sanitizedDraft.isEmpty else {
@@ -165,6 +205,10 @@ public final class AppSettingsStore: ObservableObject {
         return "Enter a full Bluetooth address like 80:C3:BA:82:06:6B."
     }
 
+    public func runTargetCheck() {
+        targetCheckResult = blocker.check(target: selectedTarget)
+    }
+
     public func openLoginItemsSystemSettings() {
         launchAtLoginController.openSystemSettings()
     }
@@ -173,7 +217,7 @@ public final class AppSettingsStore: ObservableObject {
         blocker.apply(
             configuration: BlockerConfiguration(
                 isEnabled: blockingEnabled && canEnableBlocking,
-                targetAddress: configuredTargetBluetoothAddress
+                target: selectedTarget
             )
         )
     }

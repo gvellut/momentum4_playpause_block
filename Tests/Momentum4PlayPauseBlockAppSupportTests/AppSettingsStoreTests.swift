@@ -21,12 +21,14 @@ struct AppSettingsStoreTests {
         #expect(store.showMenuBarIcon)
         #expect(!store.openAtLogin)
         #expect(store.targetBluetoothAddress.isEmpty)
+        #expect(!store.useGenericAudioHeadsetTarget)
         #expect(!store.canEnableBlocking)
+        #expect(store.targetCheckResult == nil)
         #expect(blocker.configurations.isEmpty)
     }
 
     @Test
-    func cannotEnableBlockingWithoutAddress() {
+    func cannotEnableBlockingWithoutAddressInBluetoothAddressMode() {
         let defaults = makeDefaults()
         let blocker = MockBlockerController()
         let store = AppSettingsStore(
@@ -41,7 +43,7 @@ struct AppSettingsStoreTests {
         #expect(!store.blockingEnabled)
         #expect(!store.canEnableBlocking)
         #expect(blocker.configurations.last?.isEnabled == false)
-        #expect(blocker.configurations.last?.targetAddress == nil)
+        #expect(blocker.configurations.last?.target == nil)
     }
 
     @Test
@@ -64,7 +66,31 @@ struct AppSettingsStoreTests {
         #expect(store.targetBluetoothAddress == targetAddress.rawValue)
         #expect(
             blocker.configurations.last
-                == BlockerConfiguration(isEnabled: true, targetAddress: targetAddress)
+                == BlockerConfiguration(
+                    isEnabled: true,
+                    target: .bluetoothAddress(targetAddress)
+                )
+        )
+    }
+
+    @Test
+    func genericAudioHeadsetModeAllowsBlockingWithoutAddress() {
+        let defaults = makeDefaults()
+        let blocker = MockBlockerController()
+        let store = AppSettingsStore(
+            defaults: defaults,
+            blocker: blocker,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.useGenericAudioHeadsetTarget = true
+        store.blockingEnabled = true
+
+        #expect(store.blockingEnabled)
+        #expect(store.canEnableBlocking)
+        #expect(
+            blocker.configurations.last
+                == BlockerConfiguration(isEnabled: true, target: .genericAudioHeadset)
         )
     }
 
@@ -89,6 +115,60 @@ struct AppSettingsStoreTests {
         #expect(!store.canEnableBlocking)
         #expect(!store.blockingEnabled)
         #expect(blocker.configurations.last?.isEnabled == false)
+    }
+
+    @Test
+    func switchingBackToBluetoothAddressModeDisablesBlockingWithoutAddress() {
+        let defaults = makeDefaults()
+        let blocker = MockBlockerController()
+        let store = AppSettingsStore(
+            defaults: defaults,
+            blocker: blocker,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.useGenericAudioHeadsetTarget = true
+        store.blockingEnabled = true
+
+        #expect(store.blockingEnabled)
+
+        store.useGenericAudioHeadsetTarget = false
+
+        #expect(!store.blockingEnabled)
+        #expect(!store.canEnableBlocking)
+        #expect(blocker.configurations.last == BlockerConfiguration(isEnabled: false, target: nil))
+    }
+
+    @Test
+    func targetCheckUsesCurrentSelection() {
+        let defaults = makeDefaults()
+        let blocker = MockBlockerController()
+        let expectedResult = BlockerCheckResult(
+            target: .genericAudioHeadset,
+            matchedDevice: HIDDeviceSnapshot(
+                transport: "Audio",
+                manufacturer: "Apple",
+                product: "Headset",
+                serialNumber: nil,
+                usagePage: 12,
+                usage: 1,
+                locationID: nil
+            ),
+            message: "Found matching media-control HID endpoint for generic Audio / Headset."
+        )
+        blocker.nextCheckResult = expectedResult
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            blocker: blocker,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.useGenericAudioHeadsetTarget = true
+        store.runTargetCheck()
+
+        #expect(blocker.checkedTargets == [.genericAudioHeadset])
+        #expect(store.targetCheckResult == expectedResult)
     }
 
     @Test
@@ -138,10 +218,21 @@ struct AppSettingsStoreTests {
 private final class MockBlockerController: HeadphoneBlockerControlling {
     var statusDidChange: ((BlockerStatus) -> Void)?
     var configurations: [BlockerConfiguration] = []
+    var checkedTargets: [BlockerTarget?] = []
+    var nextCheckResult = BlockerCheckResult(
+        target: nil,
+        matchedDevice: nil,
+        message: "No target configured."
+    )
 
     func apply(configuration: BlockerConfiguration) {
         configurations.append(configuration)
         statusDidChange?(.disabled)
+    }
+
+    func check(target: BlockerTarget?) -> BlockerCheckResult {
+        checkedTargets.append(target)
+        return nextCheckResult
     }
 }
 

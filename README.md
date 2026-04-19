@@ -21,9 +21,20 @@ The settings apply immediately.
 - `Enable / disable block`
 - `Show / Hide icon in menubar`
 - `Open at Login`
+- `Use generic Audio / Headset target`
 - `Target Bluetooth Address`
+- `Check`
 
-The target Bluetooth address is required before blocking can be enabled. On first launch, the app opens Preferences with blocking turned off and no device configured yet.
+The app has two explicit targeting modes:
+
+- `Bluetooth address mode`
+  This is the default. Blocking stays unavailable until you enter a full Bluetooth address, and the app will only block a media-control HID endpoint that can be linked back to that exact address.
+- `Generic Audio / Headset mode`
+  This ignores the Bluetooth address field and matches a media-control HID endpoint with `Transport = Audio` and `Product = Headset`.
+
+The `Check` button tests the currently selected mode and shows whether the app found a matching media-control HID endpoint, plus rejection details when nothing matches.
+
+On first launch, the app opens Preferences with blocking turned off and no device configured yet.
 
 ## Permissions
 
@@ -52,6 +63,8 @@ MOMENTUM 4:
 ```
 
 Copy that Bluetooth address into the `Target Bluetooth Address` field in Preferences.
+
+If the exact Bluetooth address cannot be linked to any exposed media-control HID endpoint on your Mac, you can switch to `Use generic Audio / Headset target` and use `Check` again.
 
 ## Building The App
 
@@ -90,6 +103,7 @@ The repo also includes a foreground CLI tool named `Momentum4PlayPauseBlockCLI`.
 
 - It blocks the configured Bluetooth headset while the process is running.
 - It does not share settings with the menu bar app.
+- It can run in either strict Bluetooth-address mode or generic `Audio / Headset` mode, but not both at once.
 - It requires the same HID/Input Monitoring permission, but the permission is granted to the terminal app that launches it.
 - For development builds, use the signed build and run scripts so recompiles keep the same code identity in macOS.
 

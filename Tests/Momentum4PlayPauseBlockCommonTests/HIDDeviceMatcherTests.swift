@@ -4,11 +4,7 @@ import Testing
 
 struct HIDDeviceMatcherTests {
     private let matcher = HIDDeviceMatcher()
-    private let target = BluetoothDeviceSnapshot(
-        address: BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!,
-        name: "MOMENTUM 4",
-        isConnected: true
-    )
+    private let targetAddress = BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!
 
     @Test
     func matcherAcceptsMatchingSerialNumber() {
@@ -23,35 +19,39 @@ struct HIDDeviceMatcherTests {
         )
 
         #expect(
-            matcher.match(device: device, target: target)
+            matcher.match(device: device, target: .bluetoothAddress(targetAddress))
                 == .matched("The HID serial number matches the configured Bluetooth address.")
         )
     }
 
     @Test
-    func matcherAcceptsNameAndBrandCorrelation() {
+    func matcherAcceptsRegistryAddressCorrelation() {
         let device = HIDDeviceSnapshot(
-            transport: "Bluetooth Low Energy",
-            manufacturer: "Sennheiser",
-            product: "MOMENTUM 4 Media Controller",
+            transport: "Audio",
+            manufacturer: "Apple",
+            product: "Headset",
             serialNumber: nil,
             usagePage: Int(kHIDPage_Consumer),
             usage: Int(kHIDUsage_Csmr_ConsumerControl),
-            locationID: nil
+            locationID: nil,
+            registryBluetoothAddresses: [targetAddress],
+            registryAddressHints: ["BTAddress=80:C3:BA:82:06:6B"]
         )
 
         #expect(
-            matcher.match(device: device, target: target)
-                == .matched("The HID metadata matches the connected target headset name and brand.")
+            matcher.match(device: device, target: .bluetoothAddress(targetAddress))
+                == .matched(
+                    "An address-like registry property matches the configured Bluetooth address."
+                )
         )
     }
 
     @Test
-    func matcherRejectsWeakCorrelation() {
+    func matcherRejectsAudioHeadsetWithoutBridgeInBluetoothAddressMode() {
         let device = HIDDeviceSnapshot(
-            transport: "Bluetooth",
-            manufacturer: "Keychron",
-            product: "Keyboard Media Keys",
+            transport: "Audio",
+            manufacturer: "Apple",
+            product: "Headset",
             serialNumber: nil,
             usagePage: Int(kHIDPage_Consumer),
             usage: Int(kHIDUsage_Csmr_ConsumerControl),
@@ -59,8 +59,46 @@ struct HIDDeviceMatcherTests {
         )
 
         #expect(
-            matcher.match(device: device, target: target)
-                == .rejected("The HID metadata does not match the target headset strongly enough.")
+            matcher.match(device: device, target: .bluetoothAddress(targetAddress))
+                == .rejected(
+                    "The HID endpoint does not expose the configured Bluetooth address through SerialNumber, UniqueID, or parent registry address properties."
+                )
+        )
+    }
+
+    @Test
+    func matcherAcceptsGenericAudioHeadsetTarget() {
+        let device = HIDDeviceSnapshot(
+            transport: "Audio",
+            manufacturer: "Apple",
+            product: "Headset",
+            serialNumber: nil,
+            usagePage: Int(kHIDPage_Consumer),
+            usage: Int(kHIDUsage_Csmr_ConsumerControl),
+            locationID: nil
+        )
+
+        #expect(
+            matcher.match(device: device, target: .genericAudioHeadset)
+                == .matched("The HID endpoint matches the generic Audio / Headset target.")
+        )
+    }
+
+    @Test
+    func matcherRejectsKeyboardMediaInterfaceForGenericAudioHeadsetTarget() {
+        let device = HIDDeviceSnapshot(
+            transport: "Bluetooth",
+            manufacturer: "Keychron",
+            product: "Keychron K1 Pro",
+            serialNumber: "6C:93:08:66:FF:CC",
+            usagePage: Int(kHIDPage_Consumer),
+            usage: Int(kHIDUsage_Csmr_ConsumerControl),
+            locationID: 140_967_884
+        )
+
+        #expect(
+            matcher.match(device: device, target: .genericAudioHeadset)
+                == .rejected("The HID endpoint transport is not Audio.")
         )
     }
 }

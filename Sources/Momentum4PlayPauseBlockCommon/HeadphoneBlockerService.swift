@@ -33,11 +33,11 @@ public enum BlockerStatus: Equatable, Sendable {
 
 public struct BlockerConfiguration: Equatable, Sendable {
     public let isEnabled: Bool
-    public let targetAddress: BluetoothAddress?
+    public let target: BlockerTarget?
 
-    public init(isEnabled: Bool, targetAddress: BluetoothAddress? = nil) {
+    public init(isEnabled: Bool, target: BlockerTarget? = nil) {
         self.isEnabled = isEnabled
-        self.targetAddress = targetAddress
+        self.target = target
     }
 }
 
@@ -45,6 +45,7 @@ public struct BlockerConfiguration: Equatable, Sendable {
 public protocol HeadphoneBlockerControlling: AnyObject {
     var statusDidChange: ((BlockerStatus) -> Void)? { get set }
     func apply(configuration: BlockerConfiguration)
+    func check(target: BlockerTarget?) -> BlockerCheckResult
 }
 
 @MainActor
@@ -67,7 +68,7 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         self.matcher = matcher
         self.configuration = BlockerConfiguration(
             isEnabled: false,
-            targetAddress: nil
+            target: nil
         )
 
         let matchingDictionary: [String: Any] = [
@@ -89,6 +90,34 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         reconcileState()
     }
 
+    public func check(target: BlockerTarget?) -> BlockerCheckResult {
+        guard ensureListenPermission() else {
+            return BlockerCheckResult(
+                target: target,
+                matchedDevice: nil,
+                message: BlockerStatus.permissionDenied.message
+            )
+        }
+
+        guard let target else {
+            return BlockerCheckResult(
+                target: nil,
+                matchedDevice: nil,
+                message: "Choose a target before checking for a headset."
+            )
+        }
+
+        guard openManagerIfNeeded() else {
+            return BlockerCheckResult(
+                target: target,
+                matchedDevice: nil,
+                message: "The HID manager could not be opened."
+            )
+        }
+
+        return evaluation(for: target).checkResult
+    }
+
     private func reconcileState() {
         guard configuration.isEnabled else {
             releaseAllSeizedDevices()
@@ -103,10 +132,10 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             return
         }
 
-        guard let targetAddress = configuration.targetAddress else {
+        guard let target = configuration.target else {
             releaseAllSeizedDevices()
             closeManagerIfNeeded()
-            publishStatus(.error("No Bluetooth address is configured for blocking."))
+            publishStatus(.error("No target is configured for blocking."))
             return
         }
 
@@ -116,7 +145,7 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             return
         }
 
-        refreshMatches(targetAddress: targetAddress)
+        refreshMatches(target: target)
     }
 
     private func ensureListenPermission() -> Bool {
@@ -159,78 +188,168 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         managerIsOpen = false
     }
 
-    private func refreshMatches(targetAddress: BluetoothAddress) {
-        guard let targetDevice = bluetoothResolver.resolve(address: targetAddress) else {
+    private func refreshMatches(target: BlockerTarget) {
+        let evaluation = evaluation(for: target)
+
+        guard let matches = evaluation.matchedCandidates else {
             releaseAllSeizedDevices()
-            publishStatus(
-                .waitingForTarget(
-                    "The configured Bluetooth address is unknown to macOS. Pair or connect the headset first."
-                ))
+            publishStatus(.waitingForTarget(evaluation.checkResult.message))
             return
         }
 
-        guard targetDevice.isConnected else {
-            releaseAllSeizedDevices()
-            publishStatus(
-                .waitingForTarget(
-                    "The configured headset is known, but it is not currently connected."))
-            return
-        }
-
-        guard let rawDevices = IOHIDManagerCopyDevices(manager) else {
-            releaseAllSeizedDevices()
-            publishStatus(
-                .waitingForTarget(
-                    "No Bluetooth consumer-control HID devices are currently available."))
-            return
-        }
-
-        let devices = (rawDevices as NSSet).allObjects.map { $0 as! IOHIDDevice }
         var matchingServiceIDs = Set<io_service_t>()
 
-        for device in devices {
-            var deviceName = "Unknown Device"
-            if let nameRef = IOHIDDeviceGetProperty(device, kIOHIDProductKey as CFString) {
-                deviceName = nameRef as! String
-            }
-
-            print("Found Media Controller: \(deviceName)")
-
-            let snapshot = HIDDeviceSnapshot(device: device)
-            let matchResult = matcher.match(device: snapshot, target: targetDevice)
-            guard case .matched = matchResult else {
-                continue
-            }
-
-            let service = IOHIDDeviceGetService(device)
-            guard service != IO_OBJECT_NULL else {
-                continue
-            }
-
-            matchingServiceIDs.insert(service)
-            seizeDeviceIfNeeded(device, serviceID: service)
+        for candidate in matches {
+            matchingServiceIDs.insert(candidate.serviceID)
+            seizeDeviceIfNeeded(candidate.device, serviceID: candidate.serviceID)
         }
 
-        let seizedServiceIDs = Set(seizedDevices.keys)
-        let serviceIDsToRelease = seizedServiceIDs.subtracting(matchingServiceIDs)
+        let serviceIDsToRelease = Set(seizedDevices.keys).subtracting(matchingServiceIDs)
         for serviceID in serviceIDsToRelease {
             releaseDevice(serviceID: serviceID)
         }
 
-        if let device = seizedDevices.values.first {
-            let deviceName =
-                HIDDeviceSnapshot(device: device).product
-                ?? targetDevice.name
-                ?? targetDevice.address.rawValue
-            publishStatus(.blocking(deviceName))
+        if let firstSnapshot = matches.first?.snapshot {
+            publishStatus(.blocking(blockingDeviceLabel(for: firstSnapshot, target: target)))
             return
         }
 
-        publishStatus(
-            .waitingForTarget(
-                "The target headset is connected, but no confidently matching media-control HID endpoint was found."
+        publishStatus(.waitingForTarget(evaluation.checkResult.message))
+    }
+
+    private func evaluation(for target: BlockerTarget) -> TargetEvaluation {
+        switch target {
+        case .bluetoothAddress(let address):
+            guard let targetDevice = bluetoothResolver.resolve(address: address) else {
+                return TargetEvaluation(
+                    target: target,
+                    checkResult: BlockerCheckResult(
+                        target: target,
+                        matchedDevice: nil,
+                        message: "The selected Bluetooth address is unknown to macOS. Pair or connect the headset first."
+                    ),
+                    matchedCandidates: nil
+                )
+            }
+
+            guard targetDevice.isConnected else {
+                return TargetEvaluation(
+                    target: target,
+                    checkResult: BlockerCheckResult(
+                        target: target,
+                        matchedDevice: nil,
+                        message: "The selected Bluetooth device is known to macOS, but it is not currently connected."
+                    ),
+                    matchedCandidates: nil
+                )
+            }
+
+            return evaluateConnectedDevices(
+                for: target,
+                noDevicesMessage:
+                    "The selected Bluetooth address is known to macOS, but no media-control HID endpoints are currently available.",
+                noMatchMessage:
+                    "The selected Bluetooth address is known to macOS, but it is not exposed by any available media-control HID endpoint."
             )
+
+        case .genericAudioHeadset:
+            return evaluateConnectedDevices(
+                for: target,
+                noDevicesMessage: "No media-control HID endpoints are currently available.",
+                noMatchMessage:
+                    "No generic Audio / Headset media-control HID endpoint is currently available."
+            )
+        }
+    }
+
+    private func evaluateConnectedDevices(
+        for target: BlockerTarget,
+        noDevicesMessage: String,
+        noMatchMessage: String
+    ) -> TargetEvaluation {
+        guard let rawDevices = IOHIDManagerCopyDevices(manager) else {
+            return TargetEvaluation(
+                target: target,
+                checkResult: BlockerCheckResult(
+                    target: target,
+                    matchedDevice: nil,
+                    message: noDevicesMessage
+                ),
+                matchedCandidates: nil
+            )
+        }
+
+        let devices = (rawDevices as NSSet).allObjects.map { $0 as! IOHIDDevice }
+        var matchedCandidates: [MatchedCandidate] = []
+        var rejectionMessages: [String] = []
+
+        for device in devices {
+            let snapshot = HIDDeviceSnapshot(device: device)
+            let matchResult = matcher.match(device: snapshot, target: target)
+
+            switch matchResult {
+            case .matched:
+                let service = IOHIDDeviceGetService(device)
+                guard service != IO_OBJECT_NULL else {
+                    rejectionMessages.append(
+                        rejectionMessage(
+                            for: snapshot,
+                            reason: "The HID endpoint matched, but its IORegistry service could not be opened."
+                        )
+                    )
+                    continue
+                }
+
+                matchedCandidates.append(
+                    MatchedCandidate(device: device, serviceID: service, snapshot: snapshot)
+                )
+
+            case .rejected(let reason):
+                rejectionMessages.append(rejectionMessage(for: snapshot, reason: reason))
+            }
+        }
+
+        guard let firstMatch = matchedCandidates.first else {
+            return TargetEvaluation(
+                target: target,
+                checkResult: BlockerCheckResult(
+                    target: target,
+                    matchedDevice: nil,
+                    message: noMatchMessage,
+                    rejectionMessages: rejectionMessages
+                ),
+                matchedCandidates: nil
+            )
+        }
+
+        return TargetEvaluation(
+            target: target,
+            checkResult: BlockerCheckResult(
+                target: target,
+                matchedDevice: firstMatch.snapshot,
+                message: "Found matching media-control HID endpoint for \(target.summary).",
+                rejectionMessages: rejectionMessages
+            ),
+            matchedCandidates: matchedCandidates
         )
+    }
+
+    private func rejectionMessage(for snapshot: HIDDeviceSnapshot, reason: String) -> String {
+        let summary = snapshot.displaySummary
+        guard !summary.isEmpty else {
+            return reason
+        }
+
+        return "\(summary): \(reason)"
+    }
+
+    private func blockingDeviceLabel(for snapshot: HIDDeviceSnapshot, target: BlockerTarget) -> String {
+        switch target {
+        case .bluetoothAddress(let address):
+            return snapshot.product ?? snapshot.serialNumber ?? address.rawValue
+        case .genericAudioHeadset:
+            return snapshot.product ?? target.summary
+        }
     }
 
     private func seizeDeviceIfNeeded(_ device: IOHIDDevice, serviceID: io_service_t) {
@@ -290,4 +409,16 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             service.reconcileState()
         }
     }
+}
+
+private struct MatchedCandidate {
+    let device: IOHIDDevice
+    let serviceID: io_service_t
+    let snapshot: HIDDeviceSnapshot
+}
+
+private struct TargetEvaluation {
+    let target: BlockerTarget
+    let checkResult: BlockerCheckResult
+    let matchedCandidates: [MatchedCandidate]?
 }
