@@ -2,26 +2,22 @@
 
 Momentum4 PlayPause Block is a macOS 15+ menu bar app and companion CLI that block remote play/pause commands by owning the active media-command path, then forwarding only approved HID play/pause presses back to Apple Music.
 
-The CLI path is:
-
-- hidden AppKit process
-- silent now-playing proxy
-- HID correlation
-- Apple Music forwarding through osascript
 
 ## What The Supported Path Does
 
-- Swallows remote play/pause commands that do not correlate with an allowed HID source.
-- Forwards approved HID play/pause presses to Apple Music.
-- Keeps the app in the menu bar unless you choose to hide it.
+The supported path is:
+
+- a hidden AppKit-backed process with a silent now-playing proxy so macOS routes media commands to it
+- HID correlation so only approved HID play/pause presses are treated as real local input
+- Apple Music forwarding through `osascript` for approved presses
+- swallowing of remote play/pause commands that do not correlate with an allowed HID source
+- the menu bar app stays in the menu bar unless you choose to hide it
 
 ## Limitations
 
 - Apple Music only.
   Forwarding uses AppleScript to control `Music`, so Spotify and other players are not supported by the production path.
-- The app no longer targets a Bluetooth address.
-  The supported path is source-based, not headset-ID-based.
-- While blocking is enabled, non-approved remote play/pause sources are swallowed globally.
+- The supported path is source-based, not headset-ID-based. While blocking is enabled, non-approved remote play/pause sources are swallowed globally: The app targets the way the Sennheiser Momentum 4 connects to macOS for swallowing its events. It may work for other headsets with similar setup (AVRCP) but not a given.
 
 ## Settings
 
