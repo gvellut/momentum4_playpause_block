@@ -13,16 +13,6 @@
         {
             "type": "swift",
             "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Release Momentum4PlayPauseBlock",
-            "target": "Momentum4PlayPauseBlock",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlock"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
             "args": [
                 "--generic-audio-headset",
                 "--log-events"
@@ -38,16 +28,6 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Release Momentum4PlayPauseBlockCLI",
-            "target": "Momentum4PlayPauseBlockCLI",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockCLI"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
             "name": "Debug Momentum4PlayPauseBlockDiagCLI",
             "target": "Momentum4PlayPauseBlockDiagCLI",
             "configuration": "debug",
@@ -56,12 +36,17 @@
         {
             "type": "swift",
             "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Release Momentum4PlayPauseBlockDiagCLI",
+            "name": "Debug Diag Discover",
             "target": "Momentum4PlayPauseBlockDiagCLI",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockDiagCLI"
+            "configuration": "debug",
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "args": [
+                "--theory",
+                "service-log",
+                "--bluetooth-address",
+                "80:C3:BA:82:06:6B"
+            ],
+            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI"
         }
     ]
 }

@@ -15,18 +15,6 @@
             ]
         },
         {
-            "label": "swift: Build Release Momentum4PlayPauseBlock",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
-            "args": [
-                "Momentum4PlayPauseBlock",
-                "release"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
             "label": "swift: Build Debug Momentum4PlayPauseBlockCLI",
             "type": "shell",
             "command": "${workspaceFolder}/scripts/sign-built-product.sh",
@@ -39,59 +27,13 @@
             ]
         },
         {
-            "label": "swift: Build Release Momentum4PlayPauseBlockCLI",
+            "label": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI",
             "type": "shell",
             "command": "${workspaceFolder}/scripts/sign-built-product.sh",
             "args": [
-                "Momentum4PlayPauseBlockCLI",
-                "release"
+                "Momentum4PlayPauseBlockDiagCLI",
+                "debug"
             ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
-            "label": "swift: Build Debug Tests",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/swift-package.sh",
-            "args": [
-                "build",
-                "--build-tests"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
-            "label": "swift: Build Release Tests",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/swift-package.sh",
-            "args": [
-                "build",
-                "-c",
-                "release",
-                "--build-tests"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
-            "label": "swift: Test Momentum4PlayPauseBlock",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/swift-package.sh",
-            "args": [
-                "test"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
-        },
-        {
-            "label": "swift: Build Signed App Bundle",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/build-app.sh",
-            "group": "build",
             "problemMatcher": [
                 "$swift"
             ]
