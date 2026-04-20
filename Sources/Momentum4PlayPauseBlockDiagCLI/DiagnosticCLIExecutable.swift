@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import Foundation
 import IOBluetooth
 import IOKit.hid
@@ -28,25 +29,36 @@ private enum Theory: String, CaseIterable {
     case tapBlockPlayPause = "tap-block-playpause"
     case bluetooth
     case serviceLog = "service-log"
+    case mediaRemoteProbe = "mediaremote-probe"
+    case mediaRemoteObserve = "mediaremote-observe"
+    case avrcpCompensate = "avrcp-compensate"
 
     var requiresTarget: Bool {
         switch self {
-        case .seize, .redirect, .bluetooth:
+        case .seize, .redirect, .bluetooth, .avrcpCompensate:
             return true
-        case .discover, .tapObserve, .tapBlockPlayPause, .serviceLog:
+        case .discover, .tapObserve, .tapBlockPlayPause, .serviceLog, .mediaRemoteProbe,
+            .mediaRemoteObserve:
             return false
         }
     }
 
     var requiresBluetoothAddressTarget: Bool {
-        self == .bluetooth
+        switch self {
+        case .bluetooth, .avrcpCompensate:
+            return true
+        case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .serviceLog,
+            .mediaRemoteProbe, .mediaRemoteObserve:
+            return false
+        }
     }
 
     var usesHIDManager: Bool {
         switch self {
         case .discover, .seize, .redirect:
             return true
-        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog:
+        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
+            .mediaRemoteObserve, .avrcpCompensate:
             return false
         }
     }
@@ -55,16 +67,18 @@ private enum Theory: String, CaseIterable {
         switch self {
         case .tapObserve, .tapBlockPlayPause:
             return true
-        case .discover, .seize, .redirect, .bluetooth, .serviceLog:
+        case .discover, .seize, .redirect, .bluetooth, .serviceLog, .mediaRemoteProbe,
+            .mediaRemoteObserve, .avrcpCompensate:
             return false
         }
     }
 
     var keepsRunLoopAlive: Bool {
         switch self {
-        case .bluetooth:
+        case .bluetooth, .mediaRemoteProbe:
             return false
-        case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .serviceLog:
+        case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .serviceLog,
+            .mediaRemoteObserve, .avrcpCompensate:
             return true
         }
     }
@@ -124,6 +138,10 @@ private struct CLIArguments {
     let target: TargetSelector?
     let logging: Bool
     let tapLocation: EventTapLocationOption
+    let commandBackend: CommandBackend
+    let compensationStrategy: CompensationStrategy
+    let cooldownMilliseconds: Int
+    let compensationDelayMilliseconds: Int
 }
 
 private enum EventTapLocationOption: String, CaseIterable {
@@ -143,6 +161,16 @@ private enum EventTapLocationOption: String, CaseIterable {
     }
 }
 
+private enum CommandBackend: String, CaseIterable {
+    case mediaRemote = "mediaremote"
+    case musicAppleScript = "music-applescript"
+}
+
+private enum CompensationStrategy: String, CaseIterable {
+    case immediateAndRepair = "immediate-and-repair"
+    case repairOnly = "repair-only"
+}
+
 private enum CLIArgumentError: Error, CustomStringConvertible {
     case helpRequested
     case missingTheory
@@ -152,6 +180,14 @@ private enum CLIArgumentError: Error, CustomStringConvertible {
     case invalidBluetoothAddress(String)
     case missingTapLocationValue
     case invalidTapLocation(String)
+    case missingCommandBackendValue
+    case invalidCommandBackend(String)
+    case missingCompensationStrategyValue
+    case invalidCompensationStrategy(String)
+    case missingCooldownValue
+    case invalidCooldownValue(String)
+    case missingCompensationDelayValue
+    case invalidCompensationDelayValue(String)
     case conflictingTargetFlags
     case bluetoothTheoryRequiresBluetoothAddress
     case targetRequired(Theory)
@@ -175,10 +211,27 @@ private enum CLIArgumentError: Error, CustomStringConvertible {
             return "The --tap-location flag requires a value."
         case .invalidTapLocation(let candidate):
             return "Invalid tap location: \(candidate). Use session, hid, or annotated."
+        case .missingCommandBackendValue:
+            return "The --command-backend flag requires a value."
+        case .invalidCommandBackend(let candidate):
+            return "Invalid command backend: \(candidate). Use mediaremote or music-applescript."
+        case .missingCompensationStrategyValue:
+            return "The --compensation-strategy flag requires a value."
+        case .invalidCompensationStrategy(let candidate):
+            return
+                "Invalid compensation strategy: \(candidate). Use immediate-and-repair or repair-only."
+        case .missingCooldownValue:
+            return "The --cooldown-ms flag requires a value."
+        case .invalidCooldownValue(let candidate):
+            return "Invalid cooldown milliseconds: \(candidate). Use a non-negative integer."
+        case .missingCompensationDelayValue:
+            return "The --compensation-delay-ms flag requires a value."
+        case .invalidCompensationDelayValue(let candidate):
+            return "Invalid compensation delay milliseconds: \(candidate). Use a non-negative integer."
         case .conflictingTargetFlags:
             return "Use either --bluetooth-address <id> or --generic-audio-headset, not both."
         case .bluetoothTheoryRequiresBluetoothAddress:
-            return "The bluetooth theory requires --bluetooth-address <id>."
+            return "The \(Theory.bluetooth.rawValue) and \(Theory.avrcpCompensate.rawValue) theories require --bluetooth-address <id>."
         case .targetRequired(let theory):
             return "The \(theory.rawValue) theory requires a target selector."
         case .unexpectedArgument(let argument):
@@ -194,6 +247,10 @@ private enum CLIArgumentParser {
         var wantsGenericAudioHeadset = false
         var logging = false
         var tapLocation = EventTapLocationOption.session
+        var commandBackend = CommandBackend.mediaRemote
+        var compensationStrategy = CompensationStrategy.immediateAndRepair
+        var cooldownMilliseconds = 300
+        var compensationDelayMilliseconds = 0
 
         var index = arguments.startIndex
         while index < arguments.endIndex {
@@ -244,6 +301,62 @@ private enum CLIArgumentParser {
                 tapLocation = parsedTapLocation
                 index = arguments.index(after: nextIndex)
 
+            case "--command-backend":
+                let nextIndex = arguments.index(after: index)
+                guard nextIndex < arguments.endIndex else {
+                    throw CLIArgumentError.missingCommandBackendValue
+                }
+
+                let rawValue = arguments[nextIndex]
+                guard let parsedBackend = CommandBackend(rawValue: rawValue) else {
+                    throw CLIArgumentError.invalidCommandBackend(rawValue)
+                }
+
+                commandBackend = parsedBackend
+                index = arguments.index(after: nextIndex)
+
+            case "--compensation-strategy":
+                let nextIndex = arguments.index(after: index)
+                guard nextIndex < arguments.endIndex else {
+                    throw CLIArgumentError.missingCompensationStrategyValue
+                }
+
+                let rawValue = arguments[nextIndex]
+                guard let parsedStrategy = CompensationStrategy(rawValue: rawValue) else {
+                    throw CLIArgumentError.invalidCompensationStrategy(rawValue)
+                }
+
+                compensationStrategy = parsedStrategy
+                index = arguments.index(after: nextIndex)
+
+            case "--cooldown-ms":
+                let nextIndex = arguments.index(after: index)
+                guard nextIndex < arguments.endIndex else {
+                    throw CLIArgumentError.missingCooldownValue
+                }
+
+                let rawValue = arguments[nextIndex]
+                guard let parsedValue = Int(rawValue), parsedValue >= 0 else {
+                    throw CLIArgumentError.invalidCooldownValue(rawValue)
+                }
+
+                cooldownMilliseconds = parsedValue
+                index = arguments.index(after: nextIndex)
+
+            case "--compensation-delay-ms":
+                let nextIndex = arguments.index(after: index)
+                guard nextIndex < arguments.endIndex else {
+                    throw CLIArgumentError.missingCompensationDelayValue
+                }
+
+                let rawValue = arguments[nextIndex]
+                guard let parsedValue = Int(rawValue), parsedValue >= 0 else {
+                    throw CLIArgumentError.invalidCompensationDelayValue(rawValue)
+                }
+
+                compensationDelayMilliseconds = parsedValue
+                index = arguments.index(after: nextIndex)
+
             case "--generic-audio-headset":
                 wantsGenericAudioHeadset = true
                 index = arguments.index(after: index)
@@ -275,6 +388,50 @@ private enum CLIArgumentParser {
                     }
 
                     tapLocation = parsedTapLocation
+                    index = arguments.index(after: index)
+                    continue
+                }
+
+                if argument.hasPrefix("--command-backend=") {
+                    let rawValue = String(argument.dropFirst("--command-backend=".count))
+                    guard let parsedBackend = CommandBackend(rawValue: rawValue) else {
+                        throw CLIArgumentError.invalidCommandBackend(rawValue)
+                    }
+
+                    commandBackend = parsedBackend
+                    index = arguments.index(after: index)
+                    continue
+                }
+
+                if argument.hasPrefix("--compensation-strategy=") {
+                    let rawValue = String(argument.dropFirst("--compensation-strategy=".count))
+                    guard let parsedStrategy = CompensationStrategy(rawValue: rawValue) else {
+                        throw CLIArgumentError.invalidCompensationStrategy(rawValue)
+                    }
+
+                    compensationStrategy = parsedStrategy
+                    index = arguments.index(after: index)
+                    continue
+                }
+
+                if argument.hasPrefix("--cooldown-ms=") {
+                    let rawValue = String(argument.dropFirst("--cooldown-ms=".count))
+                    guard let parsedValue = Int(rawValue), parsedValue >= 0 else {
+                        throw CLIArgumentError.invalidCooldownValue(rawValue)
+                    }
+
+                    cooldownMilliseconds = parsedValue
+                    index = arguments.index(after: index)
+                    continue
+                }
+
+                if argument.hasPrefix("--compensation-delay-ms=") {
+                    let rawValue = String(argument.dropFirst("--compensation-delay-ms=".count))
+                    guard let parsedValue = Int(rawValue), parsedValue >= 0 else {
+                        throw CLIArgumentError.invalidCompensationDelayValue(rawValue)
+                    }
+
+                    compensationDelayMilliseconds = parsedValue
                     index = arguments.index(after: index)
                     continue
                 }
@@ -318,7 +475,11 @@ private enum CLIArgumentParser {
             theory: theory,
             target: target,
             logging: logging,
-            tapLocation: tapLocation
+            tapLocation: tapLocation,
+            commandBackend: commandBackend,
+            compensationStrategy: compensationStrategy,
+            cooldownMilliseconds: cooldownMilliseconds,
+            compensationDelayMilliseconds: compensationDelayMilliseconds
         )
     }
 }
@@ -334,9 +495,13 @@ private enum CLIUsage {
           \(executableName) --theory tap-block-playpause --tap-location annotated
           \(executableName) --theory bluetooth --bluetooth-address 80:C3:BA:82:06:6B
           \(executableName) --theory service-log [--bluetooth-address 80:C3:BA:82:06:6B] [--logging]
+          \(executableName) --theory mediaremote-probe
+          \(executableName) --theory mediaremote-observe [--logging]
+          \(executableName) --theory avrcp-compensate --bluetooth-address 80:C3:BA:82:06:6B --command-backend mediaremote --logging
+          \(executableName) --theory avrcp-compensate --bluetooth-address 80:C3:BA:82:06:6B --command-backend mediaremote --compensation-strategy repair-only
 
         Required:
-          --theory discover|seize|redirect|tap-observe|tap-block-playpause|bluetooth|service-log
+          --theory discover|seize|redirect|tap-observe|tap-block-playpause|bluetooth|service-log|mediaremote-probe|mediaremote-observe|avrcp-compensate
 
         Target selectors:
           --bluetooth-address   Match a device using Bluetooth-style identity hints.
@@ -346,6 +511,12 @@ private enum CLIUsage {
         Optional:
           --logging             Add detailed device, event, mapping, and forward/drop logging.
           --tap-location        For tap theories, choose session, hid, or annotated. Default: session.
+          --command-backend     For avrcp-compensate, choose mediaremote or music-applescript. Default: mediaremote.
+          --compensation-strategy
+                                For avrcp-compensate, choose immediate-and-repair or repair-only. Default: immediate-and-repair.
+          --cooldown-ms         Ignore duplicate headset AVRCP commands inside this window. Default: 300.
+          --compensation-delay-ms
+                                Delay the compensating command by this many milliseconds. Default: 0.
 
         Notes:
           - discover may run without a target selector.
@@ -353,6 +524,9 @@ private enum CLIUsage {
           - bluetooth requires --bluetooth-address and exits after printing the Bluetooth-side probe results.
           - tap-observe and tap-block-playpause work at the translated system event layer, not the device-aware HID layer.
           - service-log tails bluetoothd / mediaremoted / rcd logs to test whether the command only appears inside the media service layer.
+          - mediaremote-probe checks whether private MediaRemote symbols can be loaded and queried in-process.
+          - mediaremote-observe registers private MediaRemote notifications and distributed playback-state notifications without sending commands.
+          - avrcp-compensate reacts only to AVRCP Play/Pause commands from the selected Bluetooth address and either sends the opposite command immediately and repairs if needed, or waits for the wrong playback-state transition and repairs only.
           - redirect automatically boots out com.apple.rcd for that theory path and restores it on exit.
           - Input Monitoring permission is required for the terminal app launching this executable.
         """
@@ -971,9 +1145,316 @@ private struct ProcessResult {
     let stderr: String
 }
 
+private enum MediaRemoteCommand: UInt32, CaseIterable {
+    case play = 0
+    case pause = 1
+
+    var label: String {
+        switch self {
+        case .play:
+            return "Play"
+        case .pause:
+            return "Pause"
+        }
+    }
+
+    var opposite: MediaRemoteCommand {
+        switch self {
+        case .play:
+            return .pause
+        case .pause:
+            return .play
+        }
+    }
+}
+
+private struct MediaRemoteProbeResult {
+    let bundleLoaded: Bool
+    let libraryOpened: Bool
+    let availableSymbols: [String: Bool]
+    let playbackStateQueryReturned: Bool
+    let playbackStateValue: UInt32?
+    let playbackStateNotificationName: String?
+}
+
+private final class MediaRemoteBridge {
+    private typealias SendCommandFunction = @convention(c) (UInt32, CFDictionary?) -> Void
+    private typealias RegisterForNowPlayingNotificationsFunction = @convention(c) (DispatchQueue)
+        -> Void
+    private typealias GetPlaybackStateFunction = @convention(c) (
+        DispatchQueue,
+        @escaping @convention(block) (UInt32) -> Void
+    ) -> Void
+
+    private let bundleLoaded: Bool
+    private let libraryHandle: UnsafeMutableRawPointer?
+    private let sendCommandFunction: SendCommandFunction?
+    private let registerForNowPlayingNotificationsFunction:
+        RegisterForNowPlayingNotificationsFunction?
+    private let getPlaybackStateFunction: GetPlaybackStateFunction?
+    private let playbackStateNotificationSymbolPointer: UnsafeMutableRawPointer?
+
+    init() {
+        let frameworkPath = "/System/Library/PrivateFrameworks/MediaRemote.framework"
+        bundleLoaded = Bundle(path: frameworkPath)?.load() ?? false
+        libraryHandle = dlopen("\(frameworkPath)/MediaRemote", RTLD_NOW)
+
+        sendCommandFunction = Self.loadFunction(named: "MRMediaRemoteSendCommand")
+        registerForNowPlayingNotificationsFunction = Self.loadFunction(
+            named: "MRMediaRemoteRegisterForNowPlayingNotifications"
+        )
+        getPlaybackStateFunction = Self.loadFunction(
+            named: "MRMediaRemoteGetNowPlayingApplicationPlaybackState"
+        )
+        playbackStateNotificationSymbolPointer = dlsym(
+            Self.globalSymbolHandle,
+            "kMRMediaRemoteNowPlayingApplicationPlaybackStateDidChangeNotification"
+        )
+    }
+
+    var nowPlayingPlaybackStateDidChangeNotificationName: String? {
+        guard let playbackStateNotificationSymbolPointer else {
+            return nil
+        }
+
+        let pointer = playbackStateNotificationSymbolPointer.assumingMemoryBound(to: CFString?.self)
+        guard let name = pointer.pointee else {
+            return nil
+        }
+
+        return name as String
+    }
+
+    func makeProbeResult(timeout: TimeInterval) -> MediaRemoteProbeResult {
+        let playbackStateProbe = queryPlaybackState(timeout: timeout)
+        return MediaRemoteProbeResult(
+            bundleLoaded: bundleLoaded,
+            libraryOpened: libraryHandle != nil,
+            availableSymbols: [
+                "MRMediaRemoteSendCommand": sendCommandFunction != nil,
+                "MRMediaRemoteRegisterForNowPlayingNotifications":
+                    registerForNowPlayingNotificationsFunction != nil,
+                "MRMediaRemoteGetNowPlayingApplicationPlaybackState":
+                    getPlaybackStateFunction != nil,
+                "kMRMediaRemoteNowPlayingApplicationPlaybackStateDidChangeNotification":
+                    playbackStateNotificationSymbolPointer != nil,
+            ],
+            playbackStateQueryReturned: playbackStateProbe.didReturn,
+            playbackStateValue: playbackStateProbe.value,
+            playbackStateNotificationName: nowPlayingPlaybackStateDidChangeNotificationName
+        )
+    }
+
+    func registerForNowPlayingNotifications() -> Bool {
+        guard let registerForNowPlayingNotificationsFunction else {
+            return false
+        }
+
+        registerForNowPlayingNotificationsFunction(.main)
+        return true
+    }
+
+    func send(command: MediaRemoteCommand) -> Bool {
+        guard let sendCommandFunction else {
+            return false
+        }
+
+        sendCommandFunction(command.rawValue, nil)
+        return true
+    }
+
+    func queryPlaybackState(timeout: TimeInterval) -> (didReturn: Bool, value: UInt32?) {
+        guard let getPlaybackStateFunction else {
+            return (false, nil)
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        let queue = DispatchQueue(label: "Momentum4PlayPauseBlockDiagCLI.MediaRemoteProbe")
+        var playbackStateValue: UInt32?
+        let callback: @convention(block) (UInt32) -> Void = { state in
+            playbackStateValue = state
+            semaphore.signal()
+        }
+
+        getPlaybackStateFunction(queue, callback)
+
+        let didReturn = semaphore.wait(timeout: .now() + timeout) == .success
+        return (didReturn, playbackStateValue)
+    }
+
+    private static var globalSymbolHandle: UnsafeMutableRawPointer {
+        UnsafeMutableRawPointer(bitPattern: -2)!
+    }
+
+    private static func loadFunction<T>(named symbol: String) -> T? {
+        guard let symbolPointer = dlsym(globalSymbolHandle, symbol) else {
+            return nil
+        }
+
+        return unsafeBitCast(symbolPointer, to: T.self)
+    }
+}
+
+private enum ServiceLogMediaRemoteDirection: String {
+    case request
+    case response
+    case clientReceived = "client-received"
+}
+
+private enum ServiceLogEventKind {
+    case avrcpCommand(command: MediaRemoteCommand, address: BluetoothAddress)
+    case mediaRemoteCommand(
+        command: MediaRemoteCommand,
+        direction: ServiceLogMediaRemoteDirection,
+        bundleIdentifier: String
+    )
+    case playbackStateTransition(from: String, to: String)
+}
+
+private struct ServiceLogEvent {
+    let timestamp: String?
+    let rawLine: String
+    let kind: ServiceLogEventKind
+}
+
+private struct PendingAVRCPCompensation {
+    let address: BluetoothAddress
+    let incomingCommand: MediaRemoteCommand
+    let compensatingCommand: MediaRemoteCommand
+    let strategy: CompensationStrategy
+    let createdAt: Date
+    var repairAttempts: Int
+
+    var expectedWrongPlaybackState: String {
+        switch incomingCommand {
+        case .pause:
+            return "paused"
+        case .play:
+            return "playing"
+        }
+    }
+
+    var desiredPlaybackState: String {
+        switch incomingCommand {
+        case .pause:
+            return "playing"
+        case .play:
+            return "paused"
+        }
+    }
+}
+
+private enum AVRCPLogEventParser {
+    private static let timestampExpression = try! NSRegularExpression(
+        pattern: #"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})"#
+    )
+    private static let avrcpCommandExpression = try! NSRegularExpression(
+        pattern: #"Received AVRCP (Play|Pause) command from device ([0-9A-F:]{17})"#
+    )
+    private static let mediaRemoteRequestResponseExpression = try! NSRegularExpression(
+        pattern: #"(Request|Response): Command = <(Play|Pause)>.*SenderBundleIdentifier = <([^>]+)>"#
+    )
+    private static let mediaRemoteClientReceivedExpression = try! NSRegularExpression(
+        pattern: #"Received command from client <.*bundleIdentifier = ([^,>]+).*command = (Play|Pause),"#
+    )
+    private static let playbackStateTransitionExpression = try! NSRegularExpression(
+        pattern: #"setting playback state from <([^>]+)> to <([^>]+)>"#
+    )
+
+    static func parse(line: String) -> ServiceLogEvent? {
+        let timestamp = firstMatch(in: line, using: timestampExpression)?.first
+
+        if let groups = firstMatch(in: line, using: avrcpCommandExpression),
+            groups.count == 2,
+            let command = mediaRemoteCommand(from: groups[0]),
+            let address = BluetoothAddress(normalizing: groups[1])
+        {
+            return ServiceLogEvent(
+                timestamp: timestamp,
+                rawLine: line,
+                kind: .avrcpCommand(command: command, address: address)
+            )
+        }
+
+        if let groups = firstMatch(in: line, using: mediaRemoteRequestResponseExpression),
+            groups.count == 3,
+            let command = mediaRemoteCommand(from: groups[1])
+        {
+            let direction: ServiceLogMediaRemoteDirection =
+                groups[0] == "Response" ? .response : .request
+            return ServiceLogEvent(
+                timestamp: timestamp,
+                rawLine: line,
+                kind: .mediaRemoteCommand(
+                    command: command,
+                    direction: direction,
+                    bundleIdentifier: groups[2]
+                )
+            )
+        }
+
+        if let groups = firstMatch(in: line, using: mediaRemoteClientReceivedExpression),
+            groups.count == 2,
+            let command = mediaRemoteCommand(from: groups[1])
+        {
+            return ServiceLogEvent(
+                timestamp: timestamp,
+                rawLine: line,
+                kind: .mediaRemoteCommand(
+                    command: command,
+                    direction: .clientReceived,
+                    bundleIdentifier: groups[0]
+                )
+            )
+        }
+
+        if let groups = firstMatch(in: line, using: playbackStateTransitionExpression),
+            groups.count == 2
+        {
+            return ServiceLogEvent(
+                timestamp: timestamp,
+                rawLine: line,
+                kind: .playbackStateTransition(from: groups[0], to: groups[1])
+            )
+        }
+
+        return nil
+    }
+
+    private static func mediaRemoteCommand(from candidate: String) -> MediaRemoteCommand? {
+        switch candidate.lowercased() {
+        case "play":
+            return .play
+        case "pause":
+            return .pause
+        default:
+            return nil
+        }
+    }
+
+    private static func firstMatch(in string: String, using expression: NSRegularExpression)
+        -> [String]?
+    {
+        let range = NSRange(string.startIndex..<string.endIndex, in: string)
+        guard let match = expression.firstMatch(in: string, options: [], range: range) else {
+            return nil
+        }
+
+        return (1..<match.numberOfRanges).compactMap { index in
+            let nsRange = match.range(at: index)
+            guard let range = Range(nsRange, in: string) else {
+                return nil
+            }
+
+            return String(string[range])
+        }
+    }
+}
+
 private final class DiagnosticCLI: @unchecked Sendable {
     private let arguments: CLIArguments
     private let manager: IOHIDManager
+    private let mediaRemoteBridge = MediaRemoteBridge()
     private var deviceSessions: [io_service_t: DeviceSession] = [:]
     private var discoverUnsupportedEventKeys = Set<String>()
     private var hidPostEventConnection: io_connect_t = IO_OBJECT_NULL
@@ -981,6 +1462,10 @@ private final class DiagnosticCLI: @unchecked Sendable {
     private var eventTapRunLoopSource: CFRunLoopSource?
     private var serviceLogProcess: Process?
     private var serviceLogPipe: Pipe?
+    private var serviceLogPendingText = ""
+    private var distributedNotificationObservers: [NSObjectProtocol] = []
+    private var lastCompensationByEventKey: [String: Date] = [:]
+    private var pendingAVRCPCompensations: [BluetoothAddress: PendingAVRCPCompensation] = [:]
     private var managerOpen = false
     private var isStopping = false
     private var shouldRestoreRCD = false
@@ -1002,8 +1487,38 @@ private final class DiagnosticCLI: @unchecked Sendable {
             writeLine(startupMessage)
             return runBluetoothTheory() ? .success : .runtimeFailure
 
+        case .mediaRemoteProbe:
+            writeLine(startupMessage)
+            return runMediaRemoteProbeTheory() ? .success : .runtimeFailure
+
         case .serviceLog:
             writeLine(startupMessage)
+            guard startServiceLogTheory() else {
+                cleanup()
+                return .runtimeFailure
+            }
+            return .success
+
+        case .mediaRemoteObserve:
+            writeLine(startupMessage)
+            guard installMediaRemoteObservers() else {
+                cleanup()
+                return .runtimeFailure
+            }
+            return .success
+
+        case .avrcpCompensate:
+            writeLine(startupMessage)
+            guard installMediaRemoteObservers() else {
+                cleanup()
+                return .runtimeFailure
+            }
+
+            guard validateCompensationBackend() else {
+                cleanup()
+                return .runtimeFailure
+            }
+
             guard startServiceLogTheory() else {
                 cleanup()
                 return .runtimeFailure
@@ -1158,6 +1673,91 @@ private final class DiagnosticCLI: @unchecked Sendable {
         return true
     }
 
+    private func runMediaRemoteProbeTheory() -> Bool {
+        let probeResult = mediaRemoteBridge.makeProbeResult(timeout: 2.0)
+        writeLine(
+            "[mediaremote probe] scope=global active MediaRemote client, not Apple Music specifically"
+        )
+        writeLine(
+            "[mediaremote probe] note=another app such as Firefox can own the active media session even while Music is open or audible"
+        )
+        writeLine("[mediaremote probe] bundle.load=\(probeResult.bundleLoaded)")
+        writeLine("[mediaremote probe] dlopen=\(probeResult.libraryOpened)")
+
+        for symbol in probeResult.availableSymbols.keys.sorted() {
+            let available = probeResult.availableSymbols[symbol] ?? false
+            writeLine("[mediaremote probe] symbol=\(symbol) available=\(available)")
+        }
+
+        if let notificationName = probeResult.playbackStateNotificationName {
+            writeLine("[mediaremote probe] playbackStateNotificationName=\(notificationName)")
+        } else {
+            writeLine("[mediaremote probe] playbackStateNotificationName=unavailable")
+        }
+
+        if probeResult.playbackStateQueryReturned {
+            let valueDescription = probeResult.playbackStateValue.map(String.init) ?? "nil"
+            writeLine("[mediaremote probe] playbackStateQuery=returned value=\(valueDescription)")
+        } else {
+            writeLine("[mediaremote probe] playbackStateQuery=timed-out")
+        }
+
+        return true
+    }
+
+    private func installMediaRemoteObservers() -> Bool {
+        let registerResult = mediaRemoteBridge.registerForNowPlayingNotifications()
+        writeLine(
+            "[mediaremote observe] registerForNowPlayingNotifications=\(registerResult)"
+        )
+
+        let distributedCenter = DistributedNotificationCenter.default()
+        let notificationNames = Set(
+            [
+                mediaRemoteBridge.nowPlayingPlaybackStateDidChangeNotificationName,
+                "com.apple.MediaRemote.nowPlayingApplicationPlaybackStateDidChange",
+                "com.apple.MediaRemote.nowPlayingApplicationIsPlayingDidChange",
+                "com.apple.MediaRemote.nowPlayingActivePlayersIsPlayingDidChange",
+            ].compactMap { $0 }
+        ).sorted()
+
+        for notificationName in notificationNames {
+            let token = distributedCenter.addObserver(
+                forName: Notification.Name(notificationName),
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                self?.handleObservedMediaRemoteNotification(
+                    centerLabel: "distributed",
+                    notificationName: notification.name.rawValue
+                )
+            }
+            distributedNotificationObservers.append(token)
+            writeLine(
+                "[mediaremote observe] observerInstalled center=distributed name=\(notificationName)"
+            )
+        }
+
+        return registerResult || !notificationNames.isEmpty
+    }
+
+    private func validateCompensationBackend() -> Bool {
+        switch arguments.commandBackend {
+        case .mediaRemote:
+            let probeResult = mediaRemoteBridge.makeProbeResult(timeout: 0.1)
+            guard probeResult.availableSymbols["MRMediaRemoteSendCommand"] == true else {
+                writeError(
+                    "The mediaremote backend is unavailable because MRMediaRemoteSendCommand could not be resolved."
+                )
+                return false
+            }
+            return true
+
+        case .musicAppleScript:
+            return true
+        }
+    }
+
     private func startServiceLogTheory() -> Bool {
         guard serviceLogProcess == nil else {
             return true
@@ -1204,27 +1804,177 @@ private final class DiagnosticCLI: @unchecked Sendable {
         serviceLogProcess = process
         serviceLogPipe = pipe
         writeLine(
-            "[service-log] streaming bluetoothd / mediaremoted / rcd logs\(arguments.logging ? " with broad output" : " with keyword filtering")"
+            "[service-log] streaming bluetoothd / mediaremoted / rcd logs\(arguments.logging ? " with broad output" : " with structured filtering")"
         )
         return true
     }
 
     private func handleServiceLogChunk(_ chunk: String) {
-        for rawLine in chunk.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(rawLine)
+        serviceLogPendingText += chunk
+        let hasTrailingNewline = serviceLogPendingText.hasSuffix("\n")
+        let rawLines = serviceLogPendingText.split(separator: "\n", omittingEmptySubsequences: false)
+
+        let linesToProcess: ArraySlice<Substring>
+        if hasTrailingNewline {
+            linesToProcess = rawLines[rawLines.startIndex..<rawLines.endIndex]
+            serviceLogPendingText.removeAll(keepingCapacity: true)
+        } else if rawLines.isEmpty {
+            return
+        } else {
+            linesToProcess = rawLines.dropLast()
+            serviceLogPendingText = String(rawLines.last ?? "")
+        }
+
+        for rawLine in linesToProcess {
+            let line = String(rawLine).trimmingCharacters(in: .newlines)
             guard !line.isEmpty else {
                 continue
             }
 
-            if shouldPrintServiceLogLine(line) {
-                writeLine("[service-log] \(line)")
-            }
+            handleServiceLogLine(line)
         }
     }
 
-    private func shouldPrintServiceLogLine(_ line: String) -> Bool {
+    private func handleServiceLogLine(_ line: String) {
+        let parsedEvent = AVRCPLogEventParser.parse(line: line)
+
+        switch arguments.theory {
+        case .serviceLog:
+            if arguments.logging {
+                writeLine("[service-log raw] \(line)")
+                return
+            }
+
+            if let parsedEvent, let compactDescription = compactDescription(for: parsedEvent) {
+                writeLine("[service-log] \(compactDescription)")
+                return
+            }
+
+            if shouldPrintRawServiceLogLine(line) {
+                writeLine("[service-log] \(line)")
+            }
+
+        case .avrcpCompensate:
+            handleAVRCPCompensationLogLine(line, parsedEvent: parsedEvent)
+
+        case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .bluetooth,
+            .mediaRemoteProbe, .mediaRemoteObserve:
+            break
+        }
+    }
+
+    private func handleObservedMediaRemoteNotification(
+        centerLabel: String,
+        notificationName: String
+    ) {
+        let timestamp = Self.serviceLogTimestampFormatter.string(from: Date())
+        writeLine(
+            "[mediaremote observe] timestamp=\(timestamp) center=\(centerLabel) name=\(notificationName)"
+        )
+    }
+
+    private func handleAVRCPCompensationLogLine(
+        _ line: String,
+        parsedEvent: ServiceLogEvent?
+    ) {
+        guard let parsedEvent else {
+            if arguments.logging && shouldPrintRawServiceLogLine(line) {
+                writeLine("[avrcp raw] \(line)")
+            }
+            return
+        }
+
+        if let compactDescription = compactDescription(for: parsedEvent) {
+            writeLine("[avrcp observed] \(compactDescription)")
+        }
+
+        switch parsedEvent.kind {
+        case .avrcpCommand(let command, let address):
+            guard isTargetAddress(address) else {
+                if arguments.logging {
+                    writeLine(
+                        "[avrcp ignored] address=\(address.rawValue) did not match target selector"
+                    )
+                }
+                return
+            }
+
+            guard shouldCompensate(for: address, incomingCommand: command) else {
+                writeLine(
+                    "[avrcp skipped] address=\(address.rawValue) command=\(command.label) reason=cooldown backend=\(arguments.commandBackend.rawValue)"
+                )
+                return
+            }
+
+            let oppositeCommand = command.opposite
+            writeLine(
+                "[avrcp match] address=\(address.rawValue) incoming=\(command.label) compensateWith=\(oppositeCommand.label) backend=\(arguments.commandBackend.rawValue) strategy=\(arguments.compensationStrategy.rawValue) delayMs=\(arguments.compensationDelayMilliseconds)"
+            )
+            armPendingCompensation(
+                incomingCommand: command,
+                compensatingCommand: oppositeCommand,
+                targetAddress: address
+            )
+
+            if arguments.compensationStrategy == .immediateAndRepair {
+                scheduleCompensation(command: oppositeCommand, targetAddress: address)
+            } else {
+                writeLine(
+                    "[avrcp waiting] address=\(address.rawValue) strategy=repair-only waitingForPlaybackStateMismatch"
+                )
+            }
+
+        case .playbackStateTransition(let from, let to):
+            handleObservedPlaybackStateTransition(from: from, to: to)
+
+        case .mediaRemoteCommand:
+            break
+        }
+    }
+
+    private func shouldEmitCompactServiceLogEvent(_ event: ServiceLogEvent) -> Bool {
+        switch event.kind {
+        case .avrcpCommand(_, let address):
+            if case .bluetoothAddress(let targetAddress) = arguments.target {
+                return address == targetAddress
+            }
+            return true
+
+        case .mediaRemoteCommand(_, _, let bundleIdentifier):
+            return bundleIdentifier == "com.apple.bluetoothd"
+
+        case .playbackStateTransition:
+            return true
+        }
+    }
+
+    private func compactDescription(for event: ServiceLogEvent) -> String? {
+        guard shouldEmitCompactServiceLogEvent(event) else {
+            return nil
+        }
+
+        let timestampPrefix = event.timestamp.map { "timestamp=\($0) " } ?? ""
+
+        switch event.kind {
+        case .avrcpCommand(let command, let address):
+            return "\(timestampPrefix)avrcpCommand=\(command.label) address=\(address.rawValue)"
+
+        case .mediaRemoteCommand(let command, let direction, let bundleIdentifier):
+            return
+                "\(timestampPrefix)mediaRemote direction=\(direction.rawValue) command=\(command.label) senderBundleIdentifier=\(bundleIdentifier)"
+
+        case .playbackStateTransition(let from, let to):
+            return "\(timestampPrefix)playbackState from=\(from) to=\(to)"
+        }
+    }
+
+    private func shouldPrintRawServiceLogLine(_ line: String) -> Bool {
         if arguments.logging {
             return true
+        }
+
+        if case .bluetoothAddress = arguments.target {
+            return false
         }
 
         let lowercaseLine = line.lowercased()
@@ -1261,6 +2011,170 @@ private final class DiagnosticCLI: @unchecked Sendable {
             }
         }
 
+        return false
+    }
+
+    private func isTargetAddress(_ address: BluetoothAddress) -> Bool {
+        guard case .bluetoothAddress(let targetAddress) = arguments.target else {
+            return false
+        }
+
+        return targetAddress == address
+    }
+
+    private func shouldCompensate(
+        for address: BluetoothAddress,
+        incomingCommand: MediaRemoteCommand
+    ) -> Bool {
+        purgeExpiredPendingCompensations()
+
+        let eventKey = "\(address.comparableKey):\(incomingCommand.rawValue)"
+        let now = Date()
+
+        if let lastDate = lastCompensationByEventKey[eventKey],
+            now.timeIntervalSince(lastDate) * 1000 < Double(arguments.cooldownMilliseconds)
+        {
+            return false
+        }
+
+        lastCompensationByEventKey[eventKey] = now
+        return true
+    }
+
+    private func armPendingCompensation(
+        incomingCommand: MediaRemoteCommand,
+        compensatingCommand: MediaRemoteCommand,
+        targetAddress: BluetoothAddress
+    ) {
+        pendingAVRCPCompensations[targetAddress] = PendingAVRCPCompensation(
+            address: targetAddress,
+            incomingCommand: incomingCommand,
+            compensatingCommand: compensatingCommand,
+            strategy: arguments.compensationStrategy,
+            createdAt: Date(),
+            repairAttempts: 0
+        )
+    }
+
+    private func purgeExpiredPendingCompensations() {
+        let now = Date()
+        let expirationInterval: TimeInterval = 2.0
+
+        pendingAVRCPCompensations = pendingAVRCPCompensations.filter { _, pending in
+            now.timeIntervalSince(pending.createdAt) < expirationInterval
+        }
+    }
+
+    private func handleObservedPlaybackStateTransition(from: String, to: String) {
+        purgeExpiredPendingCompensations()
+
+        let normalizedToState = normalizedPlaybackStateLabel(to)
+        guard !normalizedToState.isEmpty else {
+            return
+        }
+
+        for (address, pending) in Array(pendingAVRCPCompensations) {
+            if normalizedToState == pending.desiredPlaybackState {
+                writeLine(
+                    "[avrcp stabilized] address=\(address.rawValue) finalState=\(to) incoming=\(pending.incomingCommand.label)"
+                )
+                pendingAVRCPCompensations[address] = nil
+                continue
+            }
+
+            guard normalizedToState == pending.expectedWrongPlaybackState else {
+                continue
+            }
+
+            guard pending.repairAttempts < 1 else {
+                continue
+            }
+
+            writeLine(
+                "[avrcp repair] address=\(address.rawValue) strategy=\(pending.strategy.rawValue) observedFinalState=\(to) expectedFinalState=\(pending.desiredPlaybackState) sending=\(pending.compensatingCommand.label)"
+            )
+
+            var updatedPending = pending
+            updatedPending.repairAttempts += 1
+            pendingAVRCPCompensations[address] = updatedPending
+            scheduleCompensation(command: pending.compensatingCommand, targetAddress: address)
+        }
+    }
+
+    private func normalizedPlaybackStateLabel(_ state: String) -> String {
+        state
+            .lowercased()
+            .filter { $0.isLetter }
+    }
+
+    private func scheduleCompensation(command: MediaRemoteCommand, targetAddress: BluetoothAddress) {
+        let delay = Double(arguments.compensationDelayMilliseconds) / 1000.0
+        if delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.performCompensation(command: command, targetAddress: targetAddress)
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.performCompensation(command: command, targetAddress: targetAddress)
+            }
+        }
+    }
+
+    private func performCompensation(command: MediaRemoteCommand, targetAddress: BluetoothAddress) {
+        guard !isStopping else {
+            return
+        }
+
+        let succeeded: Bool
+        let backendLabel = arguments.commandBackend.rawValue
+
+        switch arguments.commandBackend {
+        case .mediaRemote:
+            succeeded = mediaRemoteBridge.send(command: command)
+
+        case .musicAppleScript:
+            succeeded = sendMusicAppleScriptCommand(command)
+        }
+
+        if succeeded {
+            writeLine(
+                "[avrcp compensate] address=\(targetAddress.rawValue) backend=\(backendLabel) command=\(command.label) result=success"
+            )
+        } else {
+            writeError(
+                "[avrcp compensate] address=\(targetAddress.rawValue) backend=\(backendLabel) command=\(command.label) result=failure"
+            )
+        }
+    }
+
+    private func sendMusicAppleScriptCommand(_ command: MediaRemoteCommand) -> Bool {
+        let verb: String
+        switch command {
+        case .play:
+            verb = "play"
+        case .pause:
+            verb = "pause"
+        }
+
+        let result = runProcess(
+            executablePath: "/usr/bin/osascript",
+            arguments: ["-e", "tell application \"Music\" to \(verb)"]
+        )
+
+        if result.status == 0 {
+            return true
+        }
+
+        let errorMessage = result.stderr.isEmpty ? result.stdout : result.stderr
+        writeError("[music-applescript] \(errorMessage)")
         return false
     }
 
@@ -1531,7 +2445,8 @@ private final class DiagnosticCLI: @unchecked Sendable {
             }
         case .redirect:
             openForObservation(session)
-        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog:
+        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
+            .mediaRemoteObserve, .avrcpCompensate:
             break
         }
     }
@@ -1558,7 +2473,8 @@ private final class DiagnosticCLI: @unchecked Sendable {
             shouldLog = session.isTarget || arguments.logging
         case .redirect:
             shouldLog = true
-        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog:
+        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
+            .mediaRemoteObserve, .avrcpCompensate:
             shouldLog = arguments.logging
         }
 
@@ -1701,7 +2617,8 @@ private final class DiagnosticCLI: @unchecked Sendable {
             }
             repost(action)
 
-        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog:
+        case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
+            .mediaRemoteObserve, .avrcpCompensate:
             return
         }
     }
@@ -2057,6 +2974,15 @@ private final class DiagnosticCLI: @unchecked Sendable {
             }
             self.serviceLogProcess = nil
             self.serviceLogPipe = nil
+            serviceLogPendingText.removeAll(keepingCapacity: false)
+        }
+
+        if !distributedNotificationObservers.isEmpty {
+            let distributedCenter = DistributedNotificationCenter.default()
+            for observer in distributedNotificationObservers {
+                distributedCenter.removeObserver(observer)
+            }
+            distributedNotificationObservers.removeAll(keepingCapacity: false)
         }
 
         IOHIDManagerUnscheduleFromRunLoop(
@@ -2127,6 +3053,18 @@ private final class DiagnosticCLI: @unchecked Sendable {
 
             return
                 "Running theory=service-log with \(loggingDescription). Tailing bluetoothd, mediaremoted, and rcd logs to test whether the command only exists inside the system media service layer. Press Control-C to stop."
+
+        case .mediaRemoteProbe:
+            return
+                "Running theory=mediaremote-probe with \(loggingDescription). Probing private MediaRemote framework loading, symbol resolution, and playback-state query behavior. This theory exits after printing its results."
+
+        case .mediaRemoteObserve:
+            return
+                "Running theory=mediaremote-observe with \(loggingDescription). Registering private MediaRemote and distributed playback-state notifications to test what a normal user process can observe. Press Control-C to stop."
+
+        case .avrcpCompensate:
+            return
+                "Running theory=avrcp-compensate for \(arguments.target!.summary) with \(loggingDescription). Listening for AVRCP Play/Pause commands from the selected Bluetooth address and using strategy=\(arguments.compensationStrategy.rawValue) through backend=\(arguments.commandBackend.rawValue) with cooldownMs=\(arguments.cooldownMilliseconds) and delayMs=\(arguments.compensationDelayMilliseconds). Press Control-C to stop."
         }
     }
 
@@ -2141,6 +3079,13 @@ private final class DiagnosticCLI: @unchecked Sendable {
     private func formattedIOReturn(_ result: IOReturn) -> String {
         "\(result) (\(formattedHex(UInt32(bitPattern: result))))"
     }
+
+    private static let serviceLogTimestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
 
     static let deviceMatchingCallback: IOHIDDeviceCallback = { context, _, _, device in
         guard let context else {
