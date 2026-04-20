@@ -24,8 +24,6 @@
             "type": "swift",
             "request": "launch",
             "args": [
-                // "--bluetooth-address",
-                // "80:C3:BA:82:06:6B"
                 "--generic-audio-headset",
                 "--log-events"
             ],
@@ -34,6 +32,36 @@
             "target": "Momentum4PlayPauseBlockCLI",
             "configuration": "debug",
             "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockCLI"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "name": "Release Momentum4PlayPauseBlockCLI",
+            "target": "Momentum4PlayPauseBlockCLI",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockCLI"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "name": "Debug Momentum4PlayPauseBlockDiagCLI",
+            "target": "Momentum4PlayPauseBlockDiagCLI",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "name": "Release Momentum4PlayPauseBlockDiagCLI",
+            "target": "Momentum4PlayPauseBlockDiagCLI",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockDiagCLI"
         }
     ]
 }

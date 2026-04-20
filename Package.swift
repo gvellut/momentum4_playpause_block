@@ -16,6 +16,10 @@ let package = Package(
             name: "Momentum4PlayPauseBlockCLI",
             targets: ["Momentum4PlayPauseBlockCLI"]
         ),
+        .executable(
+            name: "Momentum4PlayPauseBlockDiagCLI",
+            targets: ["Momentum4PlayPauseBlockDiagCLI"]
+        ),
         .library(
             name: "Momentum4PlayPauseBlockCommon",
             targets: ["Momentum4PlayPauseBlockCommon"]
@@ -43,6 +47,9 @@ let package = Package(
         .executableTarget(
             name: "Momentum4PlayPauseBlockCLI",
             dependencies: ["Momentum4PlayPauseBlockCommon"]
+        ),
+        .executableTarget(
+            name: "Momentum4PlayPauseBlockDiagCLI"
         ),
         .testTarget(
             name: "Momentum4PlayPauseBlockCommonTests",
