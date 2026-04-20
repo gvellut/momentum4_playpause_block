@@ -13,20 +13,20 @@
         {
             "type": "swift",
             "request": "launch",
+            "cwd": "${workspaceFolder:momentum4_playpause_block}",
+            "name": "Debug Momentum4PlayPauseBlockCLI Any HID",
+            "target": "Momentum4PlayPauseBlockCLI",
+            "configuration": "debug",
             "args": [
                 "--forward-source",
                 "any-hid"
             ],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Debug Momentum4PlayPauseBlockCLI",
-            "target": "Momentum4PlayPauseBlockCLI",
-            "configuration": "debug",
             "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockCLI"
         },
         {
             "type": "swift",
             "request": "launch",
-            "name": "Debug Momentum4PlayPauseBlockCLI",
+            "name": "Debug Momentum4PlayPauseBlockCLI Keychron",
             "target": "Momentum4PlayPauseBlockCLI",
             "configuration": "debug",
             "cwd": "${workspaceFolder:momentum4_playpause_block}",

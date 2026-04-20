@@ -1,3 +1,4 @@
+import AppKit
 import Dispatch
 import Foundation
 import Momentum4PlayPauseBlockCommon
@@ -6,6 +7,9 @@ import Momentum4PlayPauseBlockCommon
 struct Momentum4PlayPauseBlockCLIExecutable {
     @MainActor
     static func main() {
+        let cocoaApplication = NSApplication.shared
+        cocoaApplication.setActivationPolicy(.prohibited)
+
         let executableName = URL(
             fileURLWithPath: CommandLine.arguments.first ?? "Momentum4PlayPauseBlockCLI"
         ).lastPathComponent
@@ -68,7 +72,9 @@ final class CLIApplication {
     }
 
     func start() {
-        writeLine(startupMessage)
+        for line in startupMessages {
+            writeLine(line)
+        }
 
         proxyController.statusDidChange = { [weak self] status in
             Task { @MainActor in
@@ -120,7 +126,10 @@ final class CLIApplication {
         fputs("\(message)\n", stream)
     }
 
-    private var startupMessage: String {
-        "Running the Apple Music-only play/pause proxy. Forwarding is allowed from \(arguments.startupDescription). Press Control-C to stop."
+    private var startupMessages: [String] {
+        [
+            "Running the Apple Music-only play/pause proxy. Forwarding is allowed from \(arguments.startupDescription). Press Control-C to stop.",
+            "Hidden AppKit bootstrap is active so this CLI can own media commands through MPRemoteCommandCenter.",
+        ]
     }
 }

@@ -2,6 +2,13 @@
 
 Momentum4 PlayPause Block is a macOS 15+ menu bar app and companion CLI that block remote play/pause commands by owning the active media-command path, then forwarding only approved HID play/pause presses back to Apple Music.
 
+The CLI path is:
+
+- hidden AppKit process
+- silent now-playing proxy
+- HID correlation
+- Apple Music forwarding through osascript
+
 ## What The Supported Path Does
 
 - Swallows remote play/pause commands that do not correlate with an allowed HID source.
