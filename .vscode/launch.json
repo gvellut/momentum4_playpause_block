@@ -42,13 +42,11 @@
             "cwd": "${workspaceFolder:momentum4_playpause_block}",
             "args": [
                 "--theory",
-                "avrcp-compensate",
-                "--bluetooth-address",
-                "80:C3:BA:82:06:6B",
-                "--command-backend",
-                "mediaremote",
-                "--compensation-strategy",
-                "repair-only"
+                "now-playing-proxy",
+                "--proxy-mode",
+                "bypass-hid",
+                "--proxy-hid-match",
+                "keychron-only"
             ],
             "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI"
         }

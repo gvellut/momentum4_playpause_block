@@ -1,5 +1,11 @@
 # Momentum4 PlayPause Block
 
+
+Permission for the path that works in simple CLI 
+- `Input Monitoring`
+- controlling `Music`
+
+
 Momentum4 PlayPause Block is a small macOS 15+ menu bar app that blocks media button events coming from one Bluetooth headset, such as a Sennheiser Momentum 4, without blocking media keys from other devices like keyboards.
 
 The app lives in the background. Left-click the menu bar icon to open a menu with:

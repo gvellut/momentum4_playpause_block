@@ -1,9 +1,11 @@
 import AppKit
+import AVFoundation
 import Darwin
 import Foundation
 import IOBluetooth
 import IOKit.hid
 import IOKit.hidsystem
+import MediaPlayer
 
 private let kRCDServiceName = "com.apple.rcd"
 private let kRCDPlistPath = "/System/Library/LaunchAgents/com.apple.rcd.plist"
@@ -32,13 +34,14 @@ private enum Theory: String, CaseIterable {
     case mediaRemoteProbe = "mediaremote-probe"
     case mediaRemoteObserve = "mediaremote-observe"
     case avrcpCompensate = "avrcp-compensate"
+    case nowPlayingProxy = "now-playing-proxy"
 
     var requiresTarget: Bool {
         switch self {
         case .seize, .redirect, .bluetooth, .avrcpCompensate:
             return true
         case .discover, .tapObserve, .tapBlockPlayPause, .serviceLog, .mediaRemoteProbe,
-            .mediaRemoteObserve:
+            .mediaRemoteObserve, .nowPlayingProxy:
             return false
         }
     }
@@ -48,7 +51,7 @@ private enum Theory: String, CaseIterable {
         case .bluetooth, .avrcpCompensate:
             return true
         case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .serviceLog,
-            .mediaRemoteProbe, .mediaRemoteObserve:
+            .mediaRemoteProbe, .mediaRemoteObserve, .nowPlayingProxy:
             return false
         }
     }
@@ -58,7 +61,7 @@ private enum Theory: String, CaseIterable {
         case .discover, .seize, .redirect:
             return true
         case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
-            .mediaRemoteObserve, .avrcpCompensate:
+            .mediaRemoteObserve, .avrcpCompensate, .nowPlayingProxy:
             return false
         }
     }
@@ -68,7 +71,7 @@ private enum Theory: String, CaseIterable {
         case .tapObserve, .tapBlockPlayPause:
             return true
         case .discover, .seize, .redirect, .bluetooth, .serviceLog, .mediaRemoteProbe,
-            .mediaRemoteObserve, .avrcpCompensate:
+            .mediaRemoteObserve, .avrcpCompensate, .nowPlayingProxy:
             return false
         }
     }
@@ -78,7 +81,7 @@ private enum Theory: String, CaseIterable {
         case .bluetooth, .mediaRemoteProbe:
             return false
         case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .serviceLog,
-            .mediaRemoteObserve, .avrcpCompensate:
+            .mediaRemoteObserve, .avrcpCompensate, .nowPlayingProxy:
             return true
         }
     }
@@ -140,6 +143,8 @@ private struct CLIArguments {
     let tapLocation: EventTapLocationOption
     let commandBackend: CommandBackend
     let compensationStrategy: CompensationStrategy
+    let proxyMode: ProxyMode
+    let proxyHIDMatch: ProxyHIDMatch
     let cooldownMilliseconds: Int
     let compensationDelayMilliseconds: Int
 }
@@ -171,6 +176,16 @@ private enum CompensationStrategy: String, CaseIterable {
     case repairOnly = "repair-only"
 }
 
+private enum ProxyMode: String, CaseIterable {
+    case swallowAll = "swallow-all"
+    case bypassHID = "bypass-hid"
+}
+
+private enum ProxyHIDMatch: String, CaseIterable {
+    case keychronOnly = "keychron-only"
+    case anyKeyboard = "any-keyboard"
+}
+
 private enum CLIArgumentError: Error, CustomStringConvertible {
     case helpRequested
     case missingTheory
@@ -184,6 +199,10 @@ private enum CLIArgumentError: Error, CustomStringConvertible {
     case invalidCommandBackend(String)
     case missingCompensationStrategyValue
     case invalidCompensationStrategy(String)
+    case missingProxyModeValue
+    case invalidProxyMode(String)
+    case missingProxyHIDMatchValue
+    case invalidProxyHIDMatch(String)
     case missingCooldownValue
     case invalidCooldownValue(String)
     case missingCompensationDelayValue
@@ -220,6 +239,14 @@ private enum CLIArgumentError: Error, CustomStringConvertible {
         case .invalidCompensationStrategy(let candidate):
             return
                 "Invalid compensation strategy: \(candidate). Use immediate-and-repair or repair-only."
+        case .missingProxyModeValue:
+            return "The --proxy-mode flag requires a value."
+        case .invalidProxyMode(let candidate):
+            return "Invalid proxy mode: \(candidate). Use swallow-all or bypass-hid."
+        case .missingProxyHIDMatchValue:
+            return "The --proxy-hid-match flag requires a value."
+        case .invalidProxyHIDMatch(let candidate):
+            return "Invalid proxy HID match mode: \(candidate). Use keychron-only or any-keyboard."
         case .missingCooldownValue:
             return "The --cooldown-ms flag requires a value."
         case .invalidCooldownValue(let candidate):
@@ -249,6 +276,8 @@ private enum CLIArgumentParser {
         var tapLocation = EventTapLocationOption.session
         var commandBackend = CommandBackend.mediaRemote
         var compensationStrategy = CompensationStrategy.immediateAndRepair
+        var proxyMode = ProxyMode.swallowAll
+        var proxyHIDMatch = ProxyHIDMatch.keychronOnly
         var cooldownMilliseconds = 300
         var compensationDelayMilliseconds = 0
 
@@ -327,6 +356,34 @@ private enum CLIArgumentParser {
                 }
 
                 compensationStrategy = parsedStrategy
+                index = arguments.index(after: nextIndex)
+
+            case "--proxy-mode":
+                let nextIndex = arguments.index(after: index)
+                guard nextIndex < arguments.endIndex else {
+                    throw CLIArgumentError.missingProxyModeValue
+                }
+
+                let rawValue = arguments[nextIndex]
+                guard let parsedMode = ProxyMode(rawValue: rawValue) else {
+                    throw CLIArgumentError.invalidProxyMode(rawValue)
+                }
+
+                proxyMode = parsedMode
+                index = arguments.index(after: nextIndex)
+
+            case "--proxy-hid-match":
+                let nextIndex = arguments.index(after: index)
+                guard nextIndex < arguments.endIndex else {
+                    throw CLIArgumentError.missingProxyHIDMatchValue
+                }
+
+                let rawValue = arguments[nextIndex]
+                guard let parsedMatchMode = ProxyHIDMatch(rawValue: rawValue) else {
+                    throw CLIArgumentError.invalidProxyHIDMatch(rawValue)
+                }
+
+                proxyHIDMatch = parsedMatchMode
                 index = arguments.index(after: nextIndex)
 
             case "--cooldown-ms":
@@ -414,6 +471,28 @@ private enum CLIArgumentParser {
                     continue
                 }
 
+                if argument.hasPrefix("--proxy-mode=") {
+                    let rawValue = String(argument.dropFirst("--proxy-mode=".count))
+                    guard let parsedMode = ProxyMode(rawValue: rawValue) else {
+                        throw CLIArgumentError.invalidProxyMode(rawValue)
+                    }
+
+                    proxyMode = parsedMode
+                    index = arguments.index(after: index)
+                    continue
+                }
+
+                if argument.hasPrefix("--proxy-hid-match=") {
+                    let rawValue = String(argument.dropFirst("--proxy-hid-match=".count))
+                    guard let parsedMatchMode = ProxyHIDMatch(rawValue: rawValue) else {
+                        throw CLIArgumentError.invalidProxyHIDMatch(rawValue)
+                    }
+
+                    proxyHIDMatch = parsedMatchMode
+                    index = arguments.index(after: index)
+                    continue
+                }
+
                 if argument.hasPrefix("--cooldown-ms=") {
                     let rawValue = String(argument.dropFirst("--cooldown-ms=".count))
                     guard let parsedValue = Int(rawValue), parsedValue >= 0 else {
@@ -478,6 +557,8 @@ private enum CLIArgumentParser {
             tapLocation: tapLocation,
             commandBackend: commandBackend,
             compensationStrategy: compensationStrategy,
+            proxyMode: proxyMode,
+            proxyHIDMatch: proxyHIDMatch,
             cooldownMilliseconds: cooldownMilliseconds,
             compensationDelayMilliseconds: compensationDelayMilliseconds
         )
@@ -499,9 +580,11 @@ private enum CLIUsage {
           \(executableName) --theory mediaremote-observe [--logging]
           \(executableName) --theory avrcp-compensate --bluetooth-address 80:C3:BA:82:06:6B --command-backend mediaremote --logging
           \(executableName) --theory avrcp-compensate --bluetooth-address 80:C3:BA:82:06:6B --command-backend mediaremote --compensation-strategy repair-only
+          \(executableName) --theory now-playing-proxy --proxy-mode swallow-all
+          \(executableName) --theory now-playing-proxy --proxy-mode bypass-hid --proxy-hid-match keychron-only
 
         Required:
-          --theory discover|seize|redirect|tap-observe|tap-block-playpause|bluetooth|service-log|mediaremote-probe|mediaremote-observe|avrcp-compensate
+          --theory discover|seize|redirect|tap-observe|tap-block-playpause|bluetooth|service-log|mediaremote-probe|mediaremote-observe|avrcp-compensate|now-playing-proxy
 
         Target selectors:
           --bluetooth-address   Match a device using Bluetooth-style identity hints.
@@ -514,6 +597,8 @@ private enum CLIUsage {
           --command-backend     For avrcp-compensate, choose mediaremote or music-applescript. Default: mediaremote.
           --compensation-strategy
                                 For avrcp-compensate, choose immediate-and-repair or repair-only. Default: immediate-and-repair.
+          --proxy-mode          For now-playing-proxy, choose swallow-all or bypass-hid. Default: swallow-all.
+          --proxy-hid-match     For now-playing-proxy bypass-hid, choose keychron-only or any-keyboard. Default: keychron-only.
           --cooldown-ms         Ignore duplicate headset AVRCP commands inside this window. Default: 300.
           --compensation-delay-ms
                                 Delay the compensating command by this many milliseconds. Default: 0.
@@ -527,6 +612,8 @@ private enum CLIUsage {
           - mediaremote-probe checks whether private MediaRemote symbols can be loaded and queried in-process.
           - mediaremote-observe registers private MediaRemote notifications and distributed playback-state notifications without sending commands.
           - avrcp-compensate reacts only to AVRCP Play/Pause commands from the selected Bluetooth address and either sends the opposite command immediately and repairs if needed, or waits for the wrong playback-state transition and repairs only.
+          - now-playing-proxy claims an active now-playing slot using a silent looping audio source, then either swallows all received play/pause commands or bypasses HID keyboard play/pause presses directly to Apple Music.
+          - now-playing-proxy is not Bluetooth-address-aware. While it is active, non-HID remote play/pause sources are swallowed.
           - redirect automatically boots out com.apple.rcd for that theory path and restores it on exit.
           - Input Monitoring permission is required for the terminal app launching this executable.
         """
@@ -634,6 +721,26 @@ private struct DeviceInfo {
         }
 
         return shouldSuppressRawReportLogging
+    }
+
+    var isKeyboardInterface: Bool {
+        usagePage == Int(kHIDPage_GenericDesktop) && usage == Int(kHIDUsage_GD_Keyboard)
+    }
+
+    var matchesKeychronK1Pro: Bool {
+        guard isKeyboardInterface, let product else {
+            return false
+        }
+
+        return product.localizedCaseInsensitiveCompare("Keychron K1 Pro") == .orderedSame
+    }
+
+    var proxyKeyboardLabel: String {
+        if let product {
+            return product
+        }
+
+        return summary
     }
 
     func targetMatch(for target: TargetSelector) -> String? {
@@ -1145,6 +1252,11 @@ private struct ProcessResult {
     let stderr: String
 }
 
+private struct PendingProxyKeyboardPress {
+    let observedAt: Date
+    let deviceLabel: String
+}
+
 private enum MediaRemoteCommand: UInt32, CaseIterable {
     case play = 0
     case pause = 1
@@ -1165,6 +1277,149 @@ private enum MediaRemoteCommand: UInt32, CaseIterable {
         case .pause:
             return .play
         }
+    }
+}
+
+private enum ProxyRemoteCommand: String {
+    case togglePlayPause = "togglePlayPause"
+    case play
+    case pause
+
+    var musicAppleEventClass: AEEventClass {
+        fourCharCode("hook")
+    }
+
+    var musicAppleEventID: AEEventID {
+        switch self {
+        case .togglePlayPause:
+            return fourCharCode("PlPs")
+        case .play:
+            return fourCharCode("Play")
+        case .pause:
+            return fourCharCode("Paus")
+        }
+    }
+}
+
+private final class NowPlayingProxyController {
+    private let log: (String) -> Void
+    private let commandHandler: (ProxyRemoteCommand) -> MPRemoteCommandHandlerStatus
+    private let engine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
+    private var remoteCommandTokens: [(command: MPRemoteCommand, token: Any)] = []
+    private var isStarted = false
+
+    init(
+        log: @escaping (String) -> Void,
+        commandHandler: @escaping (ProxyRemoteCommand) -> MPRemoteCommandHandlerStatus
+    ) {
+        self.log = log
+        self.commandHandler = commandHandler
+    }
+
+    func start() -> Bool {
+        guard !isStarted else {
+            return true
+        }
+
+        do {
+            try startSilentLoop()
+        } catch {
+            log("[proxy audio] failedToStart error=\(error.localizedDescription)")
+            stop()
+            return false
+        }
+
+        publishNowPlayingState()
+        installRemoteCommandHandlers()
+        isStarted = true
+        log("[proxy started] active=true")
+        return true
+    }
+
+    func stop() {
+        for token in remoteCommandTokens {
+            token.command.removeTarget(token.token)
+        }
+        remoteCommandTokens.removeAll(keepingCapacity: false)
+
+        playerNode.stop()
+        engine.stop()
+        if engine.attachedNodes.contains(playerNode) {
+            engine.detach(playerNode)
+        }
+
+        let nowPlayingCenter = MPNowPlayingInfoCenter.default()
+        nowPlayingCenter.nowPlayingInfo = nil
+        nowPlayingCenter.playbackState = .stopped
+
+        if isStarted {
+            log("[proxy stopped] active=false")
+        }
+        isStarted = false
+    }
+
+    private func startSilentLoop() throws {
+        let sampleRate = 44_100.0
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        let frameCount = AVAudioFrameCount(sampleRate)
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            throw NSError(
+                domain: "Momentum4PlayPauseBlockDiagCLI.NowPlayingProxy",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not allocate a silent PCM buffer."]
+            )
+        }
+
+        buffer.frameLength = frameCount
+        if let channelData = buffer.floatChannelData {
+            channelData[0].initialize(repeating: 0, count: Int(frameCount))
+        }
+
+        engine.attach(playerNode)
+        engine.connect(playerNode, to: engine.mainMixerNode, format: format)
+        playerNode.volume = 0
+
+        playerNode.scheduleBuffer(buffer, at: nil, options: .loops)
+        try engine.start()
+        playerNode.play()
+        log(
+            "[proxy audio] started sampleRate=\(Int(sampleRate)) channels=1 loopFrames=\(frameCount)"
+        )
+    }
+
+    private func publishNowPlayingState() {
+        let nowPlayingCenter = MPNowPlayingInfoCenter.default()
+        nowPlayingCenter.nowPlayingInfo = [
+            MPMediaItemPropertyTitle: "Momentum4 Proxy",
+            MPMediaItemPropertyArtist: "Momentum4PlayPauseBlockDiagCLI",
+            MPNowPlayingInfoPropertyPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0,
+            MPMediaItemPropertyPlaybackDuration: 60 * 60 * 24,
+        ]
+        nowPlayingCenter.playbackState = .playing
+        log("[proxy nowPlaying] playbackState=playing title=Momentum4 Proxy")
+    }
+
+    private func installRemoteCommandHandlers() {
+        let commandCenter = MPRemoteCommandCenter.shared()
+        installHandler(for: commandCenter.togglePlayPauseCommand, command: .togglePlayPause)
+        installHandler(for: commandCenter.playCommand, command: .play)
+        installHandler(for: commandCenter.pauseCommand, command: .pause)
+    }
+
+    private func installHandler(for command: MPRemoteCommand, command proxyCommand: ProxyRemoteCommand)
+    {
+        command.isEnabled = true
+        let token = command.addTarget { [weak self] _ in
+            guard let self else {
+                return .commandFailed
+            }
+
+            return self.commandHandler(proxyCommand)
+        }
+        remoteCommandTokens.append((command: command, token: token))
     }
 }
 
@@ -1466,6 +1721,8 @@ private final class DiagnosticCLI: @unchecked Sendable {
     private var distributedNotificationObservers: [NSObjectProtocol] = []
     private var lastCompensationByEventKey: [String: Date] = [:]
     private var pendingAVRCPCompensations: [BluetoothAddress: PendingAVRCPCompensation] = [:]
+    private var pendingProxyKeyboardPress: PendingProxyKeyboardPress?
+    private var nowPlayingProxyController: NowPlayingProxyController?
     private var managerOpen = false
     private var isStopping = false
     private var shouldRestoreRCD = false
@@ -1490,6 +1747,32 @@ private final class DiagnosticCLI: @unchecked Sendable {
         case .mediaRemoteProbe:
             writeLine(startupMessage)
             return runMediaRemoteProbeTheory() ? .success : .runtimeFailure
+
+        case .nowPlayingProxy:
+            if arguments.proxyMode == .bypassHID {
+                guard ensureListenPermission() else {
+                    return .runtimeFailure
+                }
+
+                configureManager()
+
+                let openResult = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+                guard openResult == kIOReturnSuccess else {
+                    writeError("Failed to open IOHIDManager: \(formattedIOReturn(openResult)).")
+                    cleanup()
+                    return .runtimeFailure
+                }
+
+                managerOpen = true
+                attachExistingDevices()
+            }
+
+            writeLine(startupMessage)
+            guard startNowPlayingProxyTheory() else {
+                cleanup()
+                return .runtimeFailure
+            }
+            return .success
 
         case .serviceLog:
             writeLine(startupMessage)
@@ -1705,6 +1988,34 @@ private final class DiagnosticCLI: @unchecked Sendable {
         return true
     }
 
+    private func startNowPlayingProxyTheory() -> Bool {
+        let controller = NowPlayingProxyController(
+            log: { [weak self] line in
+                self?.writeLine(line)
+            },
+            commandHandler: { [weak self] command in
+                guard let self else {
+                    return .commandFailed
+                }
+
+                if Thread.isMainThread {
+                    return self.handleNowPlayingProxyRemoteCommand(command)
+                }
+
+                return DispatchQueue.main.sync {
+                    self.handleNowPlayingProxyRemoteCommand(command)
+                }
+            }
+        )
+
+        guard controller.start() else {
+            return false
+        }
+
+        nowPlayingProxyController = controller
+        return true
+    }
+
     private func installMediaRemoteObservers() -> Bool {
         let registerResult = mediaRemoteBridge.registerForNowPlayingNotifications()
         writeLine(
@@ -1756,6 +2067,68 @@ private final class DiagnosticCLI: @unchecked Sendable {
         case .musicAppleScript:
             return true
         }
+    }
+
+    private func handleNowPlayingProxyRemoteCommand(_ command: ProxyRemoteCommand)
+        -> MPRemoteCommandHandlerStatus
+    {
+        writeLine("[proxy remote] command=\(command.rawValue) mode=\(arguments.proxyMode.rawValue)")
+
+        switch arguments.proxyMode {
+        case .swallowAll:
+            writeLine("[proxy swallow] command=\(command.rawValue) reason=swallow-all")
+            return .success
+
+        case .bypassHID:
+            if let matchedPress = consumeRecentProxyKeyboardPress() {
+                let deltaMilliseconds = Int(
+                    matchedPress.deltaSeconds * 1000.0
+                )
+                writeLine("[proxy hid] device=\(matchedPress.deviceLabel) deltaMs=\(deltaMilliseconds)")
+
+                let succeeded = sendMusicAppleScriptProxyCommand(command)
+                if succeeded {
+                    writeLine(
+                        "[proxy swallow] command=\(command.rawValue) reason=recent-keyboard-hid-already-forwarded"
+                    )
+                    writeLine(
+                        "[proxy forward] backend=music-applescript command=\(command.rawValue) reason=proxy-command-correlated-with-hid device=\(matchedPress.deviceLabel)"
+                    )
+                } else {
+                    writeError(
+                        "[proxy forward] backend=music-applescript command=\(command.rawValue) result=failure device=\(matchedPress.deviceLabel)"
+                    )
+                }
+                return .success
+            }
+
+            writeLine(
+                "[proxy swallow] command=\(command.rawValue) reason=non-hid-or-no-recent-keyboard"
+            )
+            return .success
+        }
+    }
+
+    private func recordProxyKeyboardPress(deviceLabel: String) {
+        pendingProxyKeyboardPress = PendingProxyKeyboardPress(
+            observedAt: Date(),
+            deviceLabel: deviceLabel
+        )
+    }
+
+    private func consumeRecentProxyKeyboardPress() -> (deviceLabel: String, deltaSeconds: TimeInterval)? {
+        guard let pendingProxyKeyboardPress else {
+            return nil
+        }
+
+        let deltaSeconds = Date().timeIntervalSince(pendingProxyKeyboardPress.observedAt)
+        if deltaSeconds < 0 || deltaSeconds > 0.05 {
+            self.pendingProxyKeyboardPress = nil
+            return nil
+        }
+
+        self.pendingProxyKeyboardPress = nil
+        return (pendingProxyKeyboardPress.deviceLabel, deltaSeconds)
     }
 
     private func startServiceLogTheory() -> Bool {
@@ -1858,7 +2231,7 @@ private final class DiagnosticCLI: @unchecked Sendable {
             handleAVRCPCompensationLogLine(line, parsedEvent: parsedEvent)
 
         case .discover, .seize, .redirect, .tapObserve, .tapBlockPlayPause, .bluetooth,
-            .mediaRemoteProbe, .mediaRemoteObserve:
+            .mediaRemoteProbe, .mediaRemoteObserve, .nowPlayingProxy:
             break
         }
     }
@@ -2178,6 +2551,31 @@ private final class DiagnosticCLI: @unchecked Sendable {
         return false
     }
 
+    private func sendMusicAppleScriptProxyCommand(_ command: ProxyRemoteCommand) -> Bool {
+        let verb: String
+        switch command {
+        case .togglePlayPause:
+            verb = "playpause"
+        case .play:
+            verb = "play"
+        case .pause:
+            verb = "pause"
+        }
+
+        let result = runProcess(
+            executablePath: "/usr/bin/osascript",
+            arguments: ["-e", "tell application \"Music\" to \(verb)"]
+        )
+
+        if result.status == 0 {
+            return true
+        }
+
+        let errorMessage = result.stderr.isEmpty ? result.stdout : result.stderr
+        writeError("[music-applescript] \(errorMessage)")
+        return false
+    }
+
     private func installSystemEventTap() -> Bool {
         guard eventTap == nil else {
             return true
@@ -2382,6 +2780,19 @@ private final class DiagnosticCLI: @unchecked Sendable {
         }
     }
 
+    private func shouldObserveProxyHIDDevice(_ info: DeviceInfo) -> Bool {
+        guard info.isKeyboardInterface else {
+            return false
+        }
+
+        switch arguments.proxyHIDMatch {
+        case .keychronOnly:
+            return info.matchesKeychronK1Pro
+        case .anyKeyboard:
+            return true
+        }
+    }
+
     private func configureManager() {
         let matches: [[String: Any]] = [
             [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Consumer)],
@@ -2419,6 +2830,15 @@ private final class DiagnosticCLI: @unchecked Sendable {
             return
         }
 
+        if arguments.theory == .nowPlayingProxy,
+            !shouldObserveProxyHIDDevice(info)
+        {
+            if arguments.logging {
+                writeLine("[proxy hid ignored] \(info.summary)")
+            }
+            return
+        }
+
         let matchReason = arguments.target.flatMap { info.targetMatch(for: $0) }
         let isTarget = matchReason != nil
         let session = DeviceSession(
@@ -2448,6 +2868,8 @@ private final class DiagnosticCLI: @unchecked Sendable {
         case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
             .mediaRemoteObserve, .avrcpCompensate:
             break
+        case .nowPlayingProxy:
+            openForProxyObservation(session)
         }
     }
 
@@ -2474,7 +2896,7 @@ private final class DiagnosticCLI: @unchecked Sendable {
         case .redirect:
             shouldLog = true
         case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
-            .mediaRemoteObserve, .avrcpCompensate:
+            .mediaRemoteObserve, .avrcpCompensate, .nowPlayingProxy:
             shouldLog = arguments.logging
         }
 
@@ -2519,6 +2941,31 @@ private final class DiagnosticCLI: @unchecked Sendable {
 
         if arguments.theory == .discover || arguments.logging || session.isTarget {
             writeLine("[opened observe] \(session.info.summary)")
+        }
+    }
+
+    private func openForProxyObservation(_ session: DeviceSession) {
+        guard session.openMode == nil else {
+            return
+        }
+
+        session.installCallback()
+        session.schedule()
+
+        let result = IOHIDDeviceOpen(session.device, IOOptionBits(kIOHIDOptionsTypeNone))
+        guard result == kIOReturnSuccess else {
+            writeError(
+                "Failed to open device for proxy HID observation: \(session.info.summary) | result=\(formattedIOReturn(result))"
+            )
+            session.unschedule()
+            session.removeCallback()
+            return
+        }
+
+        session.openMode = .observe
+
+        if arguments.logging {
+            writeLine("[proxy hid observe] \(session.info.summary)")
         }
     }
 
@@ -2619,6 +3066,17 @@ private final class DiagnosticCLI: @unchecked Sendable {
 
         case .tapObserve, .tapBlockPlayPause, .bluetooth, .serviceLog, .mediaRemoteProbe,
             .mediaRemoteObserve, .avrcpCompensate:
+            return
+        case .nowPlayingProxy:
+            guard arguments.proxyMode == .bypassHID, event.isPress, event.action == .playPause else {
+                return
+            }
+
+            if arguments.logging {
+                writeLine("[proxy hid observed] device=\(session.info.proxyKeyboardLabel) action=playPause")
+            }
+
+            recordProxyKeyboardPress(deviceLabel: session.info.proxyKeyboardLabel)
             return
         }
     }
@@ -2940,6 +3398,9 @@ private final class DiagnosticCLI: @unchecked Sendable {
     }
 
     private func cleanup() {
+        nowPlayingProxyController?.stop()
+        nowPlayingProxyController = nil
+
         let sessions = Array(deviceSessions.values)
         deviceSessions.removeAll()
 
@@ -3065,6 +3526,10 @@ private final class DiagnosticCLI: @unchecked Sendable {
         case .avrcpCompensate:
             return
                 "Running theory=avrcp-compensate for \(arguments.target!.summary) with \(loggingDescription). Listening for AVRCP Play/Pause commands from the selected Bluetooth address and using strategy=\(arguments.compensationStrategy.rawValue) through backend=\(arguments.commandBackend.rawValue) with cooldownMs=\(arguments.cooldownMilliseconds) and delayMs=\(arguments.compensationDelayMilliseconds). Press Control-C to stop."
+
+        case .nowPlayingProxy:
+            return
+                "Running theory=now-playing-proxy with \(loggingDescription). Claiming an active now-playing slot using a silent looping audio source with proxyMode=\(arguments.proxyMode.rawValue) and proxyHIDMatch=\(arguments.proxyHIDMatch.rawValue). Non-HID remote play/pause sources are swallowed while this theory is active, and bypass-hid forwards matching keyboard play/pause presses directly to Music. Press Control-C to stop."
         }
     }
 
@@ -3154,6 +3619,13 @@ private func formattedHex<T: FixedWidthInteger>(_ value: T?) -> String {
     }
 
     return String(format: "0x%X", UInt64(truncatingIfNeeded: value))
+}
+
+private func fourCharCode(_ string: String) -> FourCharCode {
+    precondition(string.utf8.count == 4, "Expected a four-character code, got \(string)")
+    return string.utf8.reduce(0) { partial, byte in
+        (partial << 8) | FourCharCode(byte)
+    }
 }
 
 @main
