@@ -1,33 +1,89 @@
 import Momentum4PlayPauseBlockAppSupport
+import Momentum4PlayPauseBlockCommon
 import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settingsStore: AppSettingsStore
-    @State private var targetAddressDraft: String
+    @State private var allowedForwardSourceProductNameDraft: String
 
     init(settingsStore: AppSettingsStore) {
         self.settingsStore = settingsStore
-        _targetAddressDraft = State(initialValue: settingsStore.targetBluetoothAddress)
+        _allowedForwardSourceProductNameDraft = State(
+            initialValue: settingsStore.allowedForwardSourceProductName
+        )
     }
 
     var body: some View {
         Form {
-            Section {
+            Section("Blocking") {
                 Toggle("Enable / disable block", isOn: $settingsStore.blockingEnabled)
                     .disabled(!settingsStore.canEnableBlocking)
 
-                Text(settingsStore.blockerStatus.message)
+                Text(settingsStore.proxyStatus.message)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                if !settingsStore.canEnableBlocking && !settingsStore.useGenericAudioHeadsetTarget {
-                    Text("Enter a full Bluetooth address below before blocking can be enabled.")
+                if !settingsStore.canEnableBlocking {
+                    Text("Choose a forward source before enabling blocking.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
 
-                Toggle("Show / Hide icon in menubar", isOn: $settingsStore.showMenuBarIcon)
+                Text("Apple Music only. The working path forwards approved play/pause commands to Music through AppleScript.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
 
+                Text("The app needs Input Monitoring to see HID presses and Music Automation permission to control Apple Music. macOS may still require one relaunch after you grant both.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Forward Source") {
+                Picker("Source to allow forward", selection: $settingsStore.allowedForwardSourceMode) {
+                    ForEach(AllowedForwardSourceMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+
+                if settingsStore.allowedForwardSourceMode.requiresProductName {
+                    TextField(
+                        "Exact HID product name",
+                        text: $allowedForwardSourceProductNameDraft
+                    )
+                    .onChange(of: allowedForwardSourceProductNameDraft) { _, newValue in
+                        let sanitized = settingsStore.sanitizedAllowedForwardSourceProductName(newValue)
+                        if sanitized != newValue {
+                            allowedForwardSourceProductNameDraft = sanitized
+                            return
+                        }
+
+                        _ = settingsStore.updateAllowedForwardSourceProductNameDraft(sanitized)
+                    }
+                }
+
+                HStack {
+                    Button(settingsStore.isCapturingForwardSource ? "Stop Capture" : "Capture From Key Press") {
+                        settingsStore.toggleForwardSourceCapture()
+                    }
+
+                    if settingsStore.isCapturingForwardSource {
+                        Text("Press a key on the source you want to allow.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(
+                    settingsStore.allowedForwardSourceValidationMessage(
+                        for: allowedForwardSourceProductNameDraft
+                    )
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+
+            Section("App") {
+                Toggle("Show / Hide icon in menubar", isOn: $settingsStore.showMenuBarIcon)
                 Toggle("Open at Login", isOn: $settingsStore.openAtLogin)
 
                 if let message = settingsStore.launchAtLoginStatus.message {
@@ -41,61 +97,20 @@ struct SettingsView: View {
                         settingsStore.openLoginItemsSystemSettings()
                     }
                 }
-            }
 
-            Section("Advanced") {
-                Toggle(
-                    "Use generic Audio / Headset target",
-                    isOn: $settingsStore.useGenericAudioHeadsetTarget
-                )
-
-                TextField("Target Bluetooth Address", text: $targetAddressDraft)
-                    .font(.system(.body, design: .monospaced))
-                    .disabled(settingsStore.useGenericAudioHeadsetTarget)
-                    .onChange(of: targetAddressDraft) { _, newValue in
-                        let sanitized = settingsStore.sanitizedTargetBluetoothAddressDraft(newValue)
-                        if sanitized != newValue {
-                            targetAddressDraft = sanitized
-                            return
-                        }
-
-                        _ = settingsStore.updateTargetBluetoothAddressDraft(sanitized)
-                    }
-
-                Text(settingsStore.targetBluetoothAddressValidationMessage(for: targetAddressDraft))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                Button("Check") {
-                    settingsStore.runTargetCheck()
-                }
-                .disabled(settingsStore.selectedTarget == nil)
-
-                if let checkResult = settingsStore.targetCheckResult {
-                    Text(checkResult.message)
+                if !settingsStore.showMenuBarIcon {
+                    Text("If you open the app manually while the menu bar icon is hidden, Settings will open without restoring the icon. Re-enable the icon here if you want it back.")
                         .font(.footnote)
-                        .foregroundStyle(checkResult.isMatchFound ? .primary : .secondary)
-
-                    if let matchedDevice = checkResult.matchedDevice {
-                        Text(matchedDevice.displaySummary)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    ForEach(checkResult.rejectionMessages, id: \.self) { rejection in
-                        Text(rejection)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .formStyle(.grouped)
         .padding(20)
-        .frame(width: 460)
-        .onChange(of: settingsStore.targetBluetoothAddress) { _, newValue in
-            if targetAddressDraft != newValue {
-                targetAddressDraft = newValue
+        .frame(width: 520)
+        .onChange(of: settingsStore.allowedForwardSourceProductName) { _, newValue in
+            if allowedForwardSourceProductNameDraft != newValue {
+                allowedForwardSourceProductNameDraft = newValue
             }
         }
     }

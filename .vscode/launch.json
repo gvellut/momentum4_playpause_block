@@ -14,8 +14,8 @@
             "type": "swift",
             "request": "launch",
             "args": [
-                "--generic-audio-headset",
-                "--log-events"
+                "--forward-source",
+                "any-hid"
             ],
             "cwd": "${workspaceFolder:momentum4_playpause_block}",
             "name": "Debug Momentum4PlayPauseBlockCLI",
@@ -26,29 +26,17 @@
         {
             "type": "swift",
             "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Debug Momentum4PlayPauseBlockDiagCLI",
-            "target": "Momentum4PlayPauseBlockDiagCLI",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "name": "Debug Diag Discover",
-            "target": "Momentum4PlayPauseBlockDiagCLI",
+            "name": "Debug Momentum4PlayPauseBlockCLI",
+            "target": "Momentum4PlayPauseBlockCLI",
             "configuration": "debug",
             "cwd": "${workspaceFolder:momentum4_playpause_block}",
             "args": [
-                "--theory",
-                "now-playing-proxy",
-                "--proxy-mode",
-                "bypass-hid",
-                "--proxy-hid-match",
-                "keychron-only"
+                "--forward-source",
+                "specific-product-name",
+                "--product-name",
+                "Keychron K1 Pro"
             ],
-            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI"
+            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockCLI"
         }
     ]
 }

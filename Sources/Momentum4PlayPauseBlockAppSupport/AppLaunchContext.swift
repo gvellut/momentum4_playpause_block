@@ -20,4 +20,8 @@ public struct AppLaunchContext: Equatable, Sendable {
     public func shouldForceShowMenuBarIcon(currentlyVisible: Bool) -> Bool {
         !launchedAsLoginItem && !currentlyVisible
     }
+
+    public func shouldOpenSettingsWhenMenuBarIconHidden(currentlyVisible: Bool) -> Bool {
+        !launchedAsLoginItem && !currentlyVisible
+    }
 }

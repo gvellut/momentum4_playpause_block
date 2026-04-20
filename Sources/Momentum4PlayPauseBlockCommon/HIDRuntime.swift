@@ -33,12 +33,13 @@ final class SystemHIDEnvironment: HIDEnvironment {
     init() {
         manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
 
-        let matchingDictionary: [String: Any] = [
-            kIOHIDDeviceUsagePageKey: Int(kHIDPage_Consumer),
-            kIOHIDDeviceUsageKey: Int(kHIDUsage_Csmr_ConsumerControl),
+        let matchingDictionaries: [[String: Any]] = [
+            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Consumer)],
+            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Telephony)],
+            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_GenericDesktop)],
         ]
 
-        IOHIDManagerSetDeviceMatching(manager, matchingDictionary as CFDictionary)
+        IOHIDManagerSetDeviceMatchingMultiple(manager, matchingDictionaries as CFArray)
 
         let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceMatchingCallback(manager, Self.deviceMatchingCallback, context)

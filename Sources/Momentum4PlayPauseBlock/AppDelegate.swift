@@ -10,15 +10,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let settingsStore = AppRuntime.sharedStore
-        settingsStore.restoreMenuBarIconIfNeeded(for: launchContext)
         settingsStore.refreshRuntimeState()
         settingsStore.handleFirstLaunchIfNeeded { [weak self] in
             self?.showSettingsWindow()
         }
+
+        if settingsStore.shouldOpenSettingsOnLaunch(for: launchContext) {
+            showSettingsWindow()
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        AppRuntime.sharedStore.handleApplicationReopen()
+        if AppRuntime.sharedStore.shouldOpenSettingsOnReopen() {
+            showSettingsWindow()
+        }
         return false
     }
 

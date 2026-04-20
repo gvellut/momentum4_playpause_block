@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import Momentum4PlayPauseBlockCommon
 
@@ -13,12 +12,12 @@ public final class AppSettingsStore: ObservableObject {
             guard !blockingEnabled || canEnableBlocking else {
                 setBlockingEnabledWithoutSideEffects(false)
                 defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
-                applyBlockerConfiguration()
+                applyProxyConfiguration()
                 return
             }
 
             defaults.set(blockingEnabled, forKey: AppSettingsKeys.blockingEnabled)
-            applyBlockerConfiguration()
+            applyProxyConfiguration()
         }
     }
 
@@ -42,91 +41,87 @@ public final class AppSettingsStore: ObservableObject {
         }
     }
 
-    @Published public var useGenericAudioHeadsetTarget: Bool {
+    @Published public var allowedForwardSourceMode: AllowedForwardSourceMode {
         didSet {
-            guard !suppressSideEffects, oldValue != useGenericAudioHeadsetTarget else {
+            guard !suppressSideEffects, oldValue != allowedForwardSourceMode else {
                 return
             }
 
             defaults.set(
-                useGenericAudioHeadsetTarget,
-                forKey: AppSettingsKeys.useGenericAudioHeadsetTarget
+                allowedForwardSourceMode.rawValue,
+                forKey: AppSettingsKeys.allowedForwardSourceMode
             )
-            targetCheckResult = nil
 
             if blockingEnabled && !canEnableBlocking {
                 setBlockingEnabledWithoutSideEffects(false)
                 defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
             }
 
-            applyBlockerConfiguration()
+            applyProxyConfiguration()
         }
     }
 
-    @Published public private(set) var targetBluetoothAddress: String {
+    @Published public private(set) var allowedForwardSourceProductName: String {
         didSet {
-            guard !suppressSideEffects, oldValue != targetBluetoothAddress else {
+            guard !suppressSideEffects, oldValue != allowedForwardSourceProductName else {
                 return
             }
 
-            defaults.set(targetBluetoothAddress, forKey: AppSettingsKeys.targetBluetoothAddress)
-            targetCheckResult = nil
+            defaults.set(
+                allowedForwardSourceProductName,
+                forKey: AppSettingsKeys.allowedForwardSourceProductName
+            )
 
             if blockingEnabled && !canEnableBlocking {
                 setBlockingEnabledWithoutSideEffects(false)
                 defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
             }
 
-            applyBlockerConfiguration()
+            applyProxyConfiguration()
         }
     }
 
-    @Published public private(set) var blockerStatus: BlockerStatus = .disabled
+    @Published public private(set) var proxyStatus: PlaybackProxyStatus = .disabled
     @Published public private(set) var launchAtLoginStatus: LaunchAtLoginStatus
-    @Published public private(set) var targetCheckResult: BlockerCheckResult?
+    @Published public private(set) var isCapturingForwardSource = false
 
     public var canEnableBlocking: Bool {
-        useGenericAudioHeadsetTarget || configuredTargetBluetoothAddress != nil
-    }
-
-    public var configuredTargetBluetoothAddress: BluetoothAddress? {
-        BluetoothAddress(normalizing: targetBluetoothAddress)
-    }
-
-    public var selectedTarget: BlockerTarget? {
-        if useGenericAudioHeadsetTarget {
-            return .genericAudioHeadset
+        switch allowedForwardSourceMode {
+        case .specificProductName:
+            return !allowedForwardSourceProductName.isEmpty
+        case .anyKeyboard, .anyHID:
+            return true
         }
-
-        return configuredTargetBluetoothAddress.map(BlockerTarget.bluetoothAddress)
     }
 
     private let defaults: UserDefaults
-    private let blocker: HeadphoneBlockerControlling
+    private let proxyController: PlaybackProxyControlling
     private let launchAtLoginController: LaunchAtLoginControlling
     private var suppressSideEffects = false
 
     public init(
         defaults: UserDefaults = .standard,
-        blocker: HeadphoneBlockerControlling? = nil,
+        proxyController: PlaybackProxyControlling? = nil,
         launchAtLoginController: LaunchAtLoginControlling? = nil
     ) {
         self.defaults = defaults
-        self.blocker = blocker ?? HeadphoneBlockerService()
+        self.proxyController = proxyController ?? PlaybackProxyService()
         self.launchAtLoginController = launchAtLoginController ?? LaunchAtLoginController()
 
-        let storedAddress = BluetoothAddress.sanitizeUserEntry(
-            defaults.string(forKey: AppSettingsKeys.targetBluetoothAddress) ?? ""
-        )
-        let storedUseGenericTarget =
-            defaults.object(forKey: AppSettingsKeys.useGenericAudioHeadsetTarget) as? Bool ?? false
-        let storedBlockingEnabled = defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool ?? false
+        let storedMode = AllowedForwardSourceMode(
+            rawValue: defaults.string(forKey: AppSettingsKeys.allowedForwardSourceMode) ?? ""
+        ) ?? .anyHID
+        let storedProductName = defaults.string(
+            forKey: AppSettingsKeys.allowedForwardSourceProductName
+        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedBlockingEnabled = defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool
+            ?? false
 
-        self.targetBluetoothAddress = storedAddress
-        self.useGenericAudioHeadsetTarget = storedUseGenericTarget
+        self.allowedForwardSourceMode = storedMode
+        self.allowedForwardSourceProductName = storedProductName
         self.blockingEnabled =
             storedBlockingEnabled
-            && (storedUseGenericTarget || BluetoothAddress(normalizing: storedAddress) != nil)
+            && (storedMode != .specificProductName || !storedProductName.isEmpty)
         self.showMenuBarIcon = defaults.object(forKey: AppSettingsKeys.showMenuBarIcon) as? Bool ?? true
         self.openAtLogin = defaults.object(forKey: AppSettingsKeys.openAtLogin) as? Bool ?? false
         self.launchAtLoginStatus = self.launchAtLoginController.currentStatus()
@@ -135,16 +130,21 @@ public final class AppSettingsStore: ObservableObject {
             defaults.set(self.blockingEnabled, forKey: AppSettingsKeys.blockingEnabled)
         }
 
-        self.blocker.statusDidChange = { [weak self] status in
+        self.proxyController.statusDidChange = { [weak self] status in
             Task { @MainActor in
-                self?.blockerStatus = status
+                self?.proxyStatus = status
+            }
+        }
+        self.proxyController.sourceCaptureDidResolve = { [weak self] productName in
+            Task { @MainActor in
+                self?.applyCapturedForwardSourceProductName(productName)
             }
         }
     }
 
     public func refreshRuntimeState() {
         launchAtLoginStatus = launchAtLoginController.currentStatus()
-        applyBlockerConfiguration()
+        applyProxyConfiguration()
     }
 
     public func handleFirstLaunchIfNeeded(showSettings: () -> Void) {
@@ -157,67 +157,79 @@ public final class AppSettingsStore: ObservableObject {
         defaults.set(true, forKey: AppSettingsKeys.hasLaunchedBefore)
     }
 
-    public func restoreMenuBarIconIfNeeded(for launchContext: AppLaunchContext) {
-        guard launchContext.shouldForceShowMenuBarIcon(currentlyVisible: showMenuBarIcon) else {
-            return
-        }
-
-        showMenuBarIcon = true
+    public func shouldOpenSettingsOnLaunch(for launchContext: AppLaunchContext) -> Bool {
+        launchContext.shouldOpenSettingsWhenMenuBarIconHidden(currentlyVisible: showMenuBarIcon)
     }
 
-    public func handleApplicationReopen() {
-        guard !showMenuBarIcon else {
-            return
-        }
-
-        showMenuBarIcon = true
+    public func shouldOpenSettingsOnReopen() -> Bool {
+        !showMenuBarIcon
     }
 
-    @discardableResult
-    public func updateTargetBluetoothAddressDraft(_ draft: String) -> Bool {
-        targetBluetoothAddress = BluetoothAddress.sanitizeUserEntry(draft)
+    public func updateAllowedForwardSourceProductNameDraft(_ draft: String) -> Bool {
+        allowedForwardSourceProductName = sanitizedAllowedForwardSourceProductName(draft)
         return canEnableBlocking
     }
 
-    public func sanitizedTargetBluetoothAddressDraft(_ draft: String) -> String {
-        BluetoothAddress.sanitizeUserEntry(draft)
+    public func sanitizedAllowedForwardSourceProductName(_ draft: String) -> String {
+        draft.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    public func targetBluetoothAddressValidationMessage(for draft: String) -> String {
-        if useGenericAudioHeadsetTarget {
-            return "Generic Audio / Headset mode ignores the Bluetooth address field."
-        }
+    public func allowedForwardSourceValidationMessage(for draft: String) -> String {
+        let sanitizedDraft = sanitizedAllowedForwardSourceProductName(draft)
 
-        let sanitizedDraft = BluetoothAddress.sanitizeUserEntry(draft)
-
-        guard !sanitizedDraft.isEmpty else {
-            return "Enter a Bluetooth address to enable blocking."
-        }
-
-        if let normalized = BluetoothAddress(normalizing: sanitizedDraft) {
-            if normalized.rawValue == targetBluetoothAddress {
-                return "Blocking can be enabled for \(normalized.rawValue)."
+        switch allowedForwardSourceMode {
+        case .specificProductName:
+            if sanitizedDraft.isEmpty {
+                return "Enter an exact HID product name or capture it from a key press."
             }
 
-            return "The blocker will use \(normalized.rawValue) once you enable it."
+            return "Only HID devices whose product name exactly matches \"\(sanitizedDraft)\" will be forwarded."
+        case .anyKeyboard:
+            return "Forward only play/pause events that correlate with a keyboard HID source."
+        case .anyHID:
+            return "Forward play/pause events that correlate with any HID source."
         }
-
-        return "Enter a full Bluetooth address like 80:C3:BA:82:06:6B."
     }
 
-    public func runTargetCheck() {
-        targetCheckResult = blocker.check(target: selectedTarget)
+    public func toggleForwardSourceCapture() {
+        if isCapturingForwardSource {
+            proxyController.cancelSourceCapture()
+            isCapturingForwardSource = false
+            return
+        }
+
+        isCapturingForwardSource = proxyController.beginSourceCapture()
     }
 
     public func openLoginItemsSystemSettings() {
         launchAtLoginController.openSystemSettings()
     }
 
-    private func applyBlockerConfiguration() {
-        blocker.apply(
-            configuration: BlockerConfiguration(
-                isEnabled: blockingEnabled && canEnableBlocking,
-                target: selectedTarget
+    private func applyCapturedForwardSourceProductName(_ productName: String) {
+        suppressSideEffects = true
+        allowedForwardSourceMode = .specificProductName
+        allowedForwardSourceProductName = sanitizedAllowedForwardSourceProductName(productName)
+        suppressSideEffects = false
+
+        defaults.set(
+            allowedForwardSourceMode.rawValue,
+            forKey: AppSettingsKeys.allowedForwardSourceMode
+        )
+        defaults.set(
+            allowedForwardSourceProductName,
+            forKey: AppSettingsKeys.allowedForwardSourceProductName
+        )
+
+        isCapturingForwardSource = false
+        applyProxyConfiguration()
+    }
+
+    private func applyProxyConfiguration() {
+        proxyController.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: blockingEnabled && canEnableBlocking,
+                allowedForwardSourceMode: allowedForwardSourceMode,
+                allowedForwardSourceProductName: allowedForwardSourceProductName
             )
         )
     }

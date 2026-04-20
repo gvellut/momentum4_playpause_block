@@ -6,8 +6,9 @@ import Momentum4PlayPauseBlockCommon
 struct Momentum4PlayPauseBlockCLIExecutable {
     @MainActor
     static func main() {
-        let executableName = URL(fileURLWithPath: CommandLine.arguments.first ?? "Momentum4PlayPauseBlockCLI")
-            .lastPathComponent
+        let executableName = URL(
+            fileURLWithPath: CommandLine.arguments.first ?? "Momentum4PlayPauseBlockCLI"
+        ).lastPathComponent
 
         let parsedArguments: CLIArguments
         do {
@@ -29,25 +30,25 @@ struct Momentum4PlayPauseBlockCLIExecutable {
         let application = CLIApplication(arguments: parsedArguments)
         application.installSignalHandlers()
         application.start()
-        RunLoop.main.run() 
+        RunLoop.main.run()
     }
 }
 
 @MainActor
 final class CLIApplication {
     private let arguments: CLIArguments
-    private let blocker: HeadphoneBlockerControlling
+    private let proxyController: PlaybackProxyControlling
     private let statusInterpreter = CLIStatusInterpreter()
     private var signalSources: [DispatchSourceSignal] = []
-    private var lastReportedStatus: BlockerStatus?
+    private var lastReportedStatus: PlaybackProxyStatus?
     private var isStopping = false
 
     init(
         arguments: CLIArguments,
-        blocker: HeadphoneBlockerControlling = HeadphoneBlockerService()
+        proxyController: PlaybackProxyControlling = PlaybackProxyService()
     ) {
         self.arguments = arguments
-        self.blocker = blocker
+        self.proxyController = proxyController
     }
 
     func installSignalHandlers() {
@@ -69,27 +70,16 @@ final class CLIApplication {
     func start() {
         writeLine(startupMessage)
 
-        blocker.statusDidChange = { [weak self] status in
+        proxyController.statusDidChange = { [weak self] status in
             Task { @MainActor in
                 self?.handle(status: status)
             }
         }
-        blocker.inputEventDidReceive = { [weak self] event in
-            Task { @MainActor in
-                self?.handle(inputEvent: event)
-            }
-        }
 
-        blocker.apply(
-            configuration: BlockerConfiguration(
-                isEnabled: true,
-                target: arguments.target,
-                operationMode: arguments.operationMode
-            )
-        )
+        proxyController.apply(configuration: arguments.configuration)
     }
 
-    private func handle(status: BlockerStatus) {
+    private func handle(status: PlaybackProxyStatus) {
         guard !isStopping, lastReportedStatus != status else {
             return
         }
@@ -109,11 +99,11 @@ final class CLIApplication {
 
         isStopping = true
         writeLine("Stopping.")
-        blocker.apply(
-            configuration: BlockerConfiguration(
-                isEnabled: false,
-                target: arguments.target,
-                operationMode: arguments.operationMode
+        proxyController.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: false,
+                allowedForwardSourceMode: arguments.allowedForwardSourceMode,
+                allowedForwardSourceProductName: arguments.allowedForwardSourceProductName
             )
         )
         finish(.success)
@@ -131,31 +121,6 @@ final class CLIApplication {
     }
 
     private var startupMessage: String {
-        switch arguments.operationMode {
-        case .block:
-            return
-                "Blocking consumer-control events for \(arguments.startupDescription). Press Control-C to stop."
-        case .logEvents:
-            return
-                "Logging consumer-control events for \(arguments.startupDescription). Press Control-C to stop."
-        }
-    }
-
-    private func handle(inputEvent: HIDInputEvent) {
-        guard arguments.operationMode == .logEvents else {
-            return
-        }
-
-        writeLine(formatted(inputEvent: inputEvent))
-    }
-
-    private func formatted(inputEvent: HIDInputEvent) -> String {
-        let deviceSummary = inputEvent.device.displaySummary.isEmpty
-            ? (inputEvent.device.product ?? "Unknown Device")
-            : inputEvent.device.displaySummary
-        let label = inputEvent.actionLabel ?? "Unknown"
-
-        return
-            "Event action=\(label) usagePage=\(inputEvent.usagePage) usage=\(inputEvent.usage) value=\(inputEvent.value) timestamp=\(inputEvent.timestamp) device=\(deviceSummary)"
+        "Running the Apple Music-only play/pause proxy. Forwarding is allowed from \(arguments.startupDescription). Press Control-C to stop."
     }
 }

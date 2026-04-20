@@ -25,18 +25,6 @@
             "problemMatcher": [
                 "$swift"
             ]
-        },
-        {
-            "label": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI",
-            "type": "shell",
-            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
-            "args": [
-                "Momentum4PlayPauseBlockDiagCLI",
-                "debug"
-            ],
-            "problemMatcher": [
-                "$swift"
-            ]
         }
     ]
 }

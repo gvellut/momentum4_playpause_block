@@ -6,51 +6,42 @@ struct CLIArgumentParserTests {
     private let parser = CLIArgumentParser()
 
     @Test
-    func parsesNamedBluetoothAddressArgument() throws {
-        let parsed = try parser.parse(["--bluetooth-address", "80:C3:BA:82:06:6B"])
-        #expect(parsed.target == .bluetoothAddress(BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!))
-        #expect(parsed.operationMode == .block)
+    func defaultsToAnyHID() throws {
+        let parsed = try parser.parse([])
+
+        #expect(parsed.allowedForwardSourceMode == .anyHID)
+        #expect(parsed.allowedForwardSourceProductName.isEmpty)
     }
 
     @Test
-    func parsesEqualsSeparatedBluetoothAddressArgument() throws {
-        let parsed = try parser.parse(["--bluetooth-address=80-c3-ba-82-06-6b"])
-        #expect(parsed.target == .bluetoothAddress(BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!))
-        #expect(parsed.operationMode == .block)
+    func parsesSpecificProductNameMode() throws {
+        let parsed = try parser.parse([
+            "--forward-source", "specific-product-name", "--product-name", "Keychron K1 Pro",
+        ])
+
+        #expect(parsed.allowedForwardSourceMode == .specificProductName)
+        #expect(parsed.allowedForwardSourceProductName == "Keychron K1 Pro")
     }
 
     @Test
-    func parsesGenericAudioHeadsetFlag() throws {
-        let parsed = try parser.parse(["--generic-audio-headset"])
-        #expect(parsed.target == .genericAudioHeadset)
-        #expect(parsed.operationMode == .block)
+    func parsesAnyKeyboardMode() throws {
+        let parsed = try parser.parse(["--forward-source=any-keyboard"])
+
+        #expect(parsed.allowedForwardSourceMode == .anyKeyboard)
+        #expect(parsed.allowedForwardSourceProductName.isEmpty)
     }
 
     @Test
-    func parsesLogEventsWithBluetoothAddressArgument() throws {
-        let parsed = try parser.parse(["--bluetooth-address", "80:C3:BA:82:06:6B", "--log-events"])
-        #expect(parsed.target == .bluetoothAddress(BluetoothAddress(normalizing: "80:C3:BA:82:06:6B")!))
-        #expect(parsed.operationMode == .logEvents)
-    }
-
-    @Test
-    func parsesLogEventsWithGenericAudioHeadsetFlag() throws {
-        let parsed = try parser.parse(["--generic-audio-headset", "--log-events"])
-        #expect(parsed.target == .genericAudioHeadset)
-        #expect(parsed.operationMode == .logEvents)
-    }
-
-    @Test
-    func rejectsMissingTarget() {
-        #expect(throws: CLIArgumentParserError.missingTarget) {
-            try parser.parse([])
+    func rejectsSpecificProductNameWithoutProductName() {
+        #expect(throws: CLIArgumentParserError.specificProductNameRequiresValue) {
+            try parser.parse(["--forward-source", "specific-product-name"])
         }
     }
 
     @Test
-    func rejectsInvalidBluetoothAddress() {
-        #expect(throws: CLIArgumentParserError.invalidBluetoothAddress("invalid")) {
-            try parser.parse(["--bluetooth-address", "invalid"])
+    func rejectsProductNameWithoutSpecificMode() {
+        #expect(throws: CLIArgumentParserError.productNameRequiresSpecificSourceMode) {
+            try parser.parse(["--product-name", "Keychron K1 Pro"])
         }
     }
 
@@ -62,16 +53,10 @@ struct CLIArgumentParserTests {
     }
 
     @Test
-    func rejectsConflictingTargetFlags() {
-        #expect(throws: CLIArgumentParserError.conflictingTargetFlags) {
-            try parser.parse([
-                "--bluetooth-address", "80:C3:BA:82:06:6B", "--generic-audio-headset",
-            ])
-        }
-    }
+    func helpTextDocumentsAppleMusicLimitation() {
+        let helpText = CLIUsage.helpText(executableName: "tool")
 
-    @Test
-    func helpTextDocumentsLogEventsFlag() {
-        #expect(CLIUsage.helpText(executableName: "tool").contains("--log-events"))
+        #expect(helpText.contains("Apple Music-only"))
+        #expect(helpText.contains("--forward-source"))
     }
 }

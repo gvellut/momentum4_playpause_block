@@ -92,6 +92,39 @@ public struct HIDDeviceSnapshot: Equatable, Sendable {
         return parts.joined(separator: " | ")
     }
 
+    public var isKeyboardInterface: Bool {
+        usagePage == Int(kHIDPage_GenericDesktop) && usage == Int(kHIDUsage_GD_Keyboard)
+    }
+
+    public var preferredSourceLabel: String {
+        if let product,
+            !product.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return product
+        }
+
+        let summary = displaySummary
+        if !summary.isEmpty {
+            return summary
+        }
+
+        return "Unknown HID source"
+    }
+
+    public func matchesProductName(_ candidate: String) -> Bool {
+        guard let product else {
+            return false
+        }
+
+        let normalizedCandidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedCandidate.isEmpty else {
+            return false
+        }
+
+        return product.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare(normalizedCandidate) == .orderedSame
+    }
+
     private static func stringProperty(_ key: String, from device: IOHIDDevice) -> String? {
         guard let value = IOHIDDeviceGetProperty(device, key as CFString) else {
             return nil

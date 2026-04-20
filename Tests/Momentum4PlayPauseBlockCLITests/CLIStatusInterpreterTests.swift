@@ -6,24 +6,25 @@ struct CLIStatusInterpreterTests {
     private let interpreter = CLIStatusInterpreter()
 
     @Test
-    func blockingStatusKeepsProcessRunning() {
-        #expect(interpreter.action(for: .blocking("MOMENTUM 4")) == .keepRunning)
+    func activeStatusKeepsProcessRunning() {
+        #expect(interpreter.action(for: .active("all HID sources")) == .keepRunning)
     }
 
     @Test
-    func observingStatusKeepsProcessRunning() {
-        #expect(interpreter.action(for: .observing("Headset")) == .keepRunning)
+    func requestingPermissionsKeepsProcessRunning() {
+        #expect(interpreter.action(for: .requestingPermissions) == .keepRunning)
     }
 
     @Test
-    func permissionDeniedExitsWithRuntimeFailure() {
-        #expect(interpreter.action(for: .permissionDenied) == .exit(.runtimeFailure))
+    func deniedPermissionsExitWithRuntimeFailure() {
+        #expect(interpreter.action(for: .inputMonitoringDenied) == .exit(.runtimeFailure))
+        #expect(interpreter.action(for: .musicAutomationDenied) == .exit(.runtimeFailure))
     }
 
     @Test
     func runtimeErrorsWriteToStandardError() {
         #expect(interpreter.writesToStandardError(.error("boom")))
-        #expect(!interpreter.writesToStandardError(.waitingForTarget("waiting")))
-        #expect(!interpreter.writesToStandardError(.observing("Headset")))
+        #expect(interpreter.writesToStandardError(.musicAutomationDenied))
+        #expect(!interpreter.writesToStandardError(.active("all HID sources")))
     }
 }

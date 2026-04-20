@@ -6,204 +6,122 @@ import Testing
 @MainActor
 struct AppSettingsStoreTests {
     @Test
-    func defaultsAreApplied() {
+    func defaultsUseAnyHIDAndDoNotEnableBlocking() {
         let defaults = makeDefaults()
-
-        let blocker = MockBlockerController()
-        let launchController = MockLaunchAtLoginController(status: .disabled)
+        let proxyController = MockProxyController()
         let store = AppSettingsStore(
             defaults: defaults,
-            blocker: blocker,
-            launchAtLoginController: launchController
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
         )
 
         #expect(!store.blockingEnabled)
         #expect(store.showMenuBarIcon)
         #expect(!store.openAtLogin)
-        #expect(store.targetBluetoothAddress.isEmpty)
-        #expect(!store.useGenericAudioHeadsetTarget)
-        #expect(!store.canEnableBlocking)
-        #expect(store.targetCheckResult == nil)
-        #expect(blocker.configurations.isEmpty)
+        #expect(store.allowedForwardSourceMode == .anyHID)
+        #expect(store.allowedForwardSourceProductName.isEmpty)
+        #expect(store.canEnableBlocking)
+        #expect(proxyController.configurations.isEmpty)
     }
 
     @Test
-    func cannotEnableBlockingWithoutAddressInBluetoothAddressMode() {
+    func specificProductModeRequiresNonEmptyNameBeforeEnabling() {
         let defaults = makeDefaults()
-        let blocker = MockBlockerController()
+        let proxyController = MockProxyController()
         let store = AppSettingsStore(
             defaults: defaults,
-            blocker: blocker,
+            proxyController: proxyController,
             launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
         )
 
-        store.refreshRuntimeState()
+        store.allowedForwardSourceMode = .specificProductName
         store.blockingEnabled = true
 
         #expect(!store.blockingEnabled)
         #expect(!store.canEnableBlocking)
-        #expect(blocker.configurations.last?.isEnabled == false)
-        #expect(blocker.configurations.last?.target == nil)
-    }
-
-    @Test
-    func validAddressAllowsBlockingToBeEnabled() {
-        let defaults = makeDefaults()
-        let blocker = MockBlockerController()
-        let store = AppSettingsStore(
-            defaults: defaults,
-            blocker: blocker,
-            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
-        )
-
-        let targetAddress = BluetoothAddress(normalizing: "11-22-33-44-55-66")!
-        #expect(store.updateTargetBluetoothAddressDraft(targetAddress.rawValue))
-
-        store.blockingEnabled = true
-
-        #expect(store.blockingEnabled)
-        #expect(store.canEnableBlocking)
-        #expect(store.targetBluetoothAddress == targetAddress.rawValue)
         #expect(
-            blocker.configurations.last
-                == BlockerConfiguration(
-                    isEnabled: true,
-                    target: .bluetoothAddress(targetAddress)
+            proxyController.configurations.last
+                == PlaybackProxyConfiguration(
+                    enabled: false,
+                    allowedForwardSourceMode: .specificProductName,
+                    allowedForwardSourceProductName: ""
                 )
         )
     }
 
     @Test
-    func genericAudioHeadsetModeAllowsBlockingWithoutAddress() {
+    func enablingWithDeniedPermissionSurfacesProxyStatus() async {
         let defaults = makeDefaults()
-        let blocker = MockBlockerController()
+        let proxyController = MockProxyController()
+        proxyController.appliedStatus = .inputMonitoringDenied
+
         let store = AppSettingsStore(
             defaults: defaults,
-            blocker: blocker,
+            proxyController: proxyController,
             launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
         )
 
-        store.useGenericAudioHeadsetTarget = true
         store.blockingEnabled = true
+        await Task.yield()
 
         #expect(store.blockingEnabled)
+        #expect(store.proxyStatus == .inputMonitoringDenied)
+        #expect(proxyController.configurations.last?.enabled == true)
+    }
+
+    @Test
+    func sourceCaptureFillsProductNameAndSwitchesMode() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.toggleForwardSourceCapture()
+        proxyController.resolveCapture(productName: "Keychron K1 Pro")
+        await Task.yield()
+
+        #expect(!store.isCapturingForwardSource)
+        #expect(store.allowedForwardSourceMode == .specificProductName)
+        #expect(store.allowedForwardSourceProductName == "Keychron K1 Pro")
         #expect(store.canEnableBlocking)
-        #expect(
-            blocker.configurations.last
-                == BlockerConfiguration(isEnabled: true, target: .genericAudioHeadset)
-        )
     }
 
     @Test
-    func clearingAddressDisablesBlockingImmediately() {
-        let defaults = makeDefaults()
-        let blocker = MockBlockerController()
-        let store = AppSettingsStore(
-            defaults: defaults,
-            blocker: blocker,
-            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
-        )
-
-        #expect(store.updateTargetBluetoothAddressDraft("11-22-33-44-55-66"))
-        store.blockingEnabled = true
-
-        #expect(store.blockingEnabled)
-
-        _ = store.updateTargetBluetoothAddressDraft("")
-
-        #expect(store.targetBluetoothAddress.isEmpty)
-        #expect(!store.canEnableBlocking)
-        #expect(!store.blockingEnabled)
-        #expect(blocker.configurations.last?.isEnabled == false)
-    }
-
-    @Test
-    func switchingBackToBluetoothAddressModeDisablesBlockingWithoutAddress() {
-        let defaults = makeDefaults()
-        let blocker = MockBlockerController()
-        let store = AppSettingsStore(
-            defaults: defaults,
-            blocker: blocker,
-            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
-        )
-
-        store.useGenericAudioHeadsetTarget = true
-        store.blockingEnabled = true
-
-        #expect(store.blockingEnabled)
-
-        store.useGenericAudioHeadsetTarget = false
-
-        #expect(!store.blockingEnabled)
-        #expect(!store.canEnableBlocking)
-        #expect(blocker.configurations.last == BlockerConfiguration(isEnabled: false, target: nil))
-    }
-
-    @Test
-    func targetCheckUsesCurrentSelection() {
-        let defaults = makeDefaults()
-        let blocker = MockBlockerController()
-        let expectedResult = BlockerCheckResult(
-            target: .genericAudioHeadset,
-            matchedDevice: HIDDeviceSnapshot(
-                transport: "Audio",
-                manufacturer: "Apple",
-                product: "Headset",
-                serialNumber: nil,
-                usagePage: 12,
-                usage: 1,
-                locationID: nil
-            ),
-            message: "Found matching media-control HID candidate for generic Audio / Headset."
-        )
-        blocker.nextCheckResult = expectedResult
-
-        let store = AppSettingsStore(
-            defaults: defaults,
-            blocker: blocker,
-            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
-        )
-
-        store.useGenericAudioHeadsetTarget = true
-        store.runTargetCheck()
-
-        #expect(blocker.checkedTargets == [.genericAudioHeadset])
-        #expect(store.targetCheckResult == expectedResult)
-    }
-
-    @Test
-    func firstLaunchHandlerRunsOnlyOnce() {
-        let defaults = makeDefaults()
-        let store = AppSettingsStore(
-            defaults: defaults,
-            blocker: MockBlockerController(),
-            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
-        )
-
-        var showSettingsCallCount = 0
-        store.handleFirstLaunchIfNeeded {
-            showSettingsCallCount += 1
-        }
-        store.handleFirstLaunchIfNeeded {
-            showSettingsCallCount += 1
-        }
-
-        #expect(showSettingsCallCount == 1)
-    }
-
-    @Test
-    func manualLaunchCanForceMenuBarIconVisibleAgain() {
+    func manualLaunchWithHiddenIconOpensSettingsWithoutRestoringIcon() {
         let defaults = makeDefaults()
         defaults.set(false, forKey: AppSettingsKeys.showMenuBarIcon)
 
         let store = AppSettingsStore(
             defaults: defaults,
-            blocker: MockBlockerController(),
+            proxyController: MockProxyController(),
             launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
         )
 
-        store.restoreMenuBarIconIfNeeded(for: AppLaunchContext(launchedAsLoginItem: false))
-        #expect(store.showMenuBarIcon)
+        #expect(
+            store.shouldOpenSettingsOnLaunch(for: AppLaunchContext(launchedAsLoginItem: false))
+        )
+        #expect(!store.showMenuBarIcon)
+        #expect(store.shouldOpenSettingsOnReopen())
+    }
+
+    @Test
+    func openAtLoginRequestsAreStillForwardedToController() {
+        let defaults = makeDefaults()
+        let launchController = MockLaunchAtLoginController(status: .disabled)
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: MockProxyController(),
+            launchAtLoginController: launchController
+        )
+
+        store.openAtLogin = true
+
+        #expect(store.openAtLogin)
+        #expect(launchController.setEnabledCalls == [true])
+        #expect(store.launchAtLoginStatus == .enabled)
     }
 
     private func makeDefaults() -> UserDefaults {
@@ -215,30 +133,40 @@ struct AppSettingsStoreTests {
 }
 
 @MainActor
-private final class MockBlockerController: HeadphoneBlockerControlling {
-    var statusDidChange: ((BlockerStatus) -> Void)?
-    var inputEventDidReceive: ((HIDInputEvent) -> Void)?
-    var configurations: [BlockerConfiguration] = []
-    var checkedTargets: [BlockerTarget?] = []
-    var nextCheckResult = BlockerCheckResult(
-        target: nil,
-        matchedDevice: nil,
-        message: "No target configured."
-    )
+private final class MockProxyController: PlaybackProxyControlling {
+    var statusDidChange: ((PlaybackProxyStatus) -> Void)?
+    var sourceCaptureDidResolve: ((String) -> Void)?
+    var configurations: [PlaybackProxyConfiguration] = []
+    var appliedStatus: PlaybackProxyStatus?
+    var beginSourceCaptureResult = true
+    var beginSourceCaptureCalls = 0
+    var cancelSourceCaptureCalls = 0
 
-    func apply(configuration: BlockerConfiguration) {
+    func apply(configuration: PlaybackProxyConfiguration) {
         configurations.append(configuration)
-        statusDidChange?(.disabled)
+
+        if let appliedStatus {
+            statusDidChange?(appliedStatus)
+        }
     }
 
-    func check(target: BlockerTarget?) -> BlockerCheckResult {
-        checkedTargets.append(target)
-        return nextCheckResult
+    func beginSourceCapture() -> Bool {
+        beginSourceCaptureCalls += 1
+        return beginSourceCaptureResult
+    }
+
+    func cancelSourceCapture() {
+        cancelSourceCaptureCalls += 1
+    }
+
+    func resolveCapture(productName: String) {
+        sourceCaptureDidResolve?(productName)
     }
 }
 
 private final class MockLaunchAtLoginController: LaunchAtLoginControlling {
     private let current: LaunchAtLoginStatus
+    private(set) var setEnabledCalls: [Bool] = []
 
     init(status: LaunchAtLoginStatus) {
         self.current = status
@@ -249,7 +177,8 @@ private final class MockLaunchAtLoginController: LaunchAtLoginControlling {
     }
 
     func setEnabled(_ enabled: Bool) -> LaunchAtLoginStatus {
-        enabled ? .enabled : .disabled
+        setEnabledCalls.append(enabled)
+        return enabled ? .enabled : .disabled
     }
 
     func openSystemSettings() {}

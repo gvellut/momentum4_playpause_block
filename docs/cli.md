@@ -1,47 +1,30 @@
-# CLI Developer Guide
+# CLI Guide
 
-`Momentum4PlayPauseBlockCLI` is a foreground command-line tool that blocks media-control events from one Bluetooth headset while the process is running.
+`Momentum4PlayPauseBlockCLI` runs the supported Apple Music-only proxy path in the foreground.
 
-It uses the same HID blocking code as the menu bar app, but it does not use the app's `UserDefaults`, menu bar UI, or Login Item support.
+It does not use the app’s `UserDefaults`, menu bar UI, or Login Item support, but it does use the same forwarding model:
 
-Choose exactly one target mode when you run it:
+- swallow remote play/pause commands by default
+- allow forwarding only from the HID source mode you choose
+- send approved commands to Apple Music through AppleScript
 
-- `--bluetooth-address <id>`
-- `--generic-audio-headset`
+## Options
 
-Those two flags are mutually exclusive.
-
-You can optionally add:
-
-- `--log-events`
-
-In `--log-events` mode, the CLI does not seize the matching HID endpoint. It opens the device non-exclusively and prints each received consumer-control event while macOS continues to handle the events normally.
+- `--forward-source specific-product-name | any-keyboard | any-hid`
+  Default: `any-hid`
+- `--product-name "Exact HID Product Name"`
+  Required only when `--forward-source specific-product-name` is used
 
 ## Permissions
 
-The CLI also needs macOS permission to inspect HID media events.
+The CLI needs the same permissions as the app:
 
 - `Input Monitoring`
-  Allow the terminal app that launches the CLI in `System Settings > Privacy & Security > Input Monitoring`.
+  Grant it to the terminal host that launches the CLI.
+- `Automation` for `Music`
+  The first forwarded command may trigger the Music automation prompt.
 
-If you run the CLI from VS Code's integrated terminal, Terminal, iTerm, or another shell host, grant Input Monitoring to that host app.
-
-Without that permission, the CLI will exit with an error after macOS denies HID listen access.
-
-## Find The Bluetooth Address
-
-Run:
-
-```bash
-system_profiler SPBluetoothDataType
-```
-
-Look for your headset and copy its `Address`, for example:
-
-```text
-MOMENTUM 4:
-    Address: 80:C3:BA:82:06:6B
-```
+On some systems macOS may still require one relaunch after both permissions are granted.
 
 ## Build
 
@@ -59,58 +42,28 @@ Release build:
 
 ## Run
 
-Run the signed development binary:
+Default `any-hid` mode:
 
 ```bash
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --bluetooth-address 80:C3:BA:82:06:6B
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug
 ```
 
-Or run it against the generic `Audio / Headset` endpoint:
+Allow only keyboard HID sources:
 
 ```bash
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --generic-audio-headset
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --forward-source any-keyboard
 ```
 
-Or log events instead of blocking them:
+Allow one exact HID product name:
 
 ```bash
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --generic-audio-headset --log-events
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --forward-source specific-product-name --product-name "Keychron K1 Pro"
 ```
 
-The CLI stays in the foreground and keeps watching for the matching HID endpoint. Stop it with `Control-C`.
+The CLI stays in the foreground until you stop it with `Control-C`.
 
-If the device is not connected yet, the CLI stays alive and waits until the headset appears.
+## Notes
 
-## Use The Built Binary
-
-After building, ask SwiftPM for the binary directory:
-
-```bash
-./scripts/swift-package.sh build --show-bin-path
-```
-
-Then run the binary directly:
-
-```bash
-<bin-path>/Momentum4PlayPauseBlockCLI --bluetooth-address 80:C3:BA:82:06:6B
-```
-
-Or:
-
-```bash
-<bin-path>/Momentum4PlayPauseBlockCLI --generic-audio-headset
-```
-
-Or:
-
-```bash
-<bin-path>/Momentum4PlayPauseBlockCLI --bluetooth-address 80:C3:BA:82:06:6B --log-events
-```
-
-For repeat use outside development, a release build is the better default.
-
-## Why The Signed Dev Build Matters
-
-Plain `swift build` outputs are rewritten on each compile and can look like a brand new unsigned program to macOS. That can make previously granted `Input Monitoring` approval stop applying.
-
-The signed build and run scripts in this repo rebuild the CLI and then sign the resulting binary with `My Swift Dev Cert`, which gives the development binary a stable code identity across recompiles.
+- Apple Music only.
+- The CLI no longer accepts Bluetooth-address or generic-headset flags.
+- The documented production path is source-based, not headset-ID-based.

@@ -184,6 +184,7 @@ private enum ProxyMode: String, CaseIterable {
 private enum ProxyHIDMatch: String, CaseIterable {
     case keychronOnly = "keychron-only"
     case anyKeyboard = "any-keyboard"
+    case anyHID = "any-hid"
 }
 
 private enum CLIArgumentError: Error, CustomStringConvertible {
@@ -246,7 +247,7 @@ private enum CLIArgumentError: Error, CustomStringConvertible {
         case .missingProxyHIDMatchValue:
             return "The --proxy-hid-match flag requires a value."
         case .invalidProxyHIDMatch(let candidate):
-            return "Invalid proxy HID match mode: \(candidate). Use keychron-only or any-keyboard."
+            return "Invalid proxy HID match mode: \(candidate). Use keychron-only, any-keyboard, or any-hid."
         case .missingCooldownValue:
             return "The --cooldown-ms flag requires a value."
         case .invalidCooldownValue(let candidate):
@@ -598,7 +599,7 @@ private enum CLIUsage {
           --compensation-strategy
                                 For avrcp-compensate, choose immediate-and-repair or repair-only. Default: immediate-and-repair.
           --proxy-mode          For now-playing-proxy, choose swallow-all or bypass-hid. Default: swallow-all.
-          --proxy-hid-match     For now-playing-proxy bypass-hid, choose keychron-only or any-keyboard. Default: keychron-only.
+          --proxy-hid-match     For now-playing-proxy bypass-hid, choose keychron-only, any-keyboard, or any-hid. Default: keychron-only.
           --cooldown-ms         Ignore duplicate headset AVRCP commands inside this window. Default: 300.
           --compensation-delay-ms
                                 Delay the compensating command by this many milliseconds. Default: 0.
@@ -612,7 +613,7 @@ private enum CLIUsage {
           - mediaremote-probe checks whether private MediaRemote symbols can be loaded and queried in-process.
           - mediaremote-observe registers private MediaRemote notifications and distributed playback-state notifications without sending commands.
           - avrcp-compensate reacts only to AVRCP Play/Pause commands from the selected Bluetooth address and either sends the opposite command immediately and repairs if needed, or waits for the wrong playback-state transition and repairs only.
-          - now-playing-proxy claims an active now-playing slot using a silent looping audio source, then either swallows all received play/pause commands or bypasses HID keyboard play/pause presses directly to Apple Music.
+          - now-playing-proxy claims an active now-playing slot using a silent looping audio source, then either swallows all received play/pause commands or bypasses matching HID play/pause presses directly to Apple Music.
           - now-playing-proxy is not Bluetooth-address-aware. While it is active, non-HID remote play/pause sources are swallowed.
           - redirect automatically boots out com.apple.rcd for that theory path and restores it on exit.
           - Input Monitoring permission is required for the terminal app launching this executable.
@@ -2781,14 +2782,12 @@ private final class DiagnosticCLI: @unchecked Sendable {
     }
 
     private func shouldObserveProxyHIDDevice(_ info: DeviceInfo) -> Bool {
-        guard info.isKeyboardInterface else {
-            return false
-        }
-
         switch arguments.proxyHIDMatch {
         case .keychronOnly:
             return info.matchesKeychronK1Pro
         case .anyKeyboard:
+            return info.isKeyboardInterface
+        case .anyHID:
             return true
         }
     }
@@ -3529,7 +3528,7 @@ private final class DiagnosticCLI: @unchecked Sendable {
 
         case .nowPlayingProxy:
             return
-                "Running theory=now-playing-proxy with \(loggingDescription). Claiming an active now-playing slot using a silent looping audio source with proxyMode=\(arguments.proxyMode.rawValue) and proxyHIDMatch=\(arguments.proxyHIDMatch.rawValue). Non-HID remote play/pause sources are swallowed while this theory is active, and bypass-hid forwards matching keyboard play/pause presses directly to Music. Press Control-C to stop."
+                "Running theory=now-playing-proxy with \(loggingDescription). Claiming an active now-playing slot using a silent looping audio source with proxyMode=\(arguments.proxyMode.rawValue) and proxyHIDMatch=\(arguments.proxyHIDMatch.rawValue). Non-HID remote play/pause sources are swallowed while this theory is active, and bypass-hid forwards matching HID play/pause presses directly to Music. Press Control-C to stop."
         }
     }
 

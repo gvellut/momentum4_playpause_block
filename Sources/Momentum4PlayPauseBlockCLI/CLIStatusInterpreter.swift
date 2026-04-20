@@ -13,20 +13,20 @@ enum CLIStatusAction: Equatable {
 }
 
 struct CLIStatusInterpreter {
-    func action(for status: BlockerStatus) -> CLIStatusAction {
+    func action(for status: PlaybackProxyStatus) -> CLIStatusAction {
         switch status {
-        case .requestingPermission, .waitingForTarget, .blocking, .observing:
+        case .requestingPermissions, .active:
             return .keepRunning
-        case .disabled, .permissionDenied, .error:
+        case .disabled, .inputMonitoringDenied, .musicAutomationDenied, .error:
             return .exit(.runtimeFailure)
         }
     }
 
-    func writesToStandardError(_ status: BlockerStatus) -> Bool {
+    func writesToStandardError(_ status: PlaybackProxyStatus) -> Bool {
         switch status {
-        case .permissionDenied, .error:
+        case .inputMonitoringDenied, .musicAutomationDenied, .error:
             return true
-        case .disabled, .requestingPermission, .waitingForTarget, .blocking, .observing:
+        case .disabled, .requestingPermissions, .active:
             return false
         }
     }

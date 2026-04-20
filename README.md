@@ -1,147 +1,90 @@
 # Momentum4 PlayPause Block
 
+Momentum4 PlayPause Block is a macOS 15+ menu bar app and companion CLI that block remote play/pause commands by owning the active media-command path, then forwarding only approved HID play/pause presses back to Apple Music.
 
-Permission for the path that works in simple CLI 
-- `Input Monitoring`
-- controlling `Music`
+## What The Supported Path Does
 
+- Swallows remote play/pause commands that do not correlate with an allowed HID source.
+- Forwards approved HID play/pause presses to Apple Music.
+- Keeps the app in the menu bar unless you choose to hide it.
 
-Momentum4 PlayPause Block is a small macOS 15+ menu bar app that blocks media button events coming from one Bluetooth headset, such as a Sennheiser Momentum 4, without blocking media keys from other devices like keyboards.
+## Limitations
 
-The app lives in the background. Left-click the menu bar icon to open a menu with:
+- Apple Music only.
+  Forwarding uses AppleScript to control `Music`, so Spotify and other players are not supported by the production path.
+- The app no longer targets a Bluetooth address.
+  The supported path is source-based, not headset-ID-based.
+- While blocking is enabled, non-approved remote play/pause sources are swallowed globally.
 
-- `Preferences…`
-- `Quit`
-
-The icon is a simple circle:
-
-- Filled circle: blocking is enabled
-- Outline circle: blocking is disabled
-
-If you hide the menu bar icon and later reopen the app from `/Applications`, the icon will appear again so you can interact with it and hide it later if you want.
-
-## Preferences
+## Settings
 
 The settings apply immediately.
 
 - `Enable / disable block`
+- `Source to allow forward`
+  - `Specific device name`
+  - `All keyboards`
+  - `All HID`
+- `Exact HID product name`
+  Only shown for `Specific device name`.
+- `Capture From Key Press`
+  Listen for the next HID key press and fill the device name automatically.
 - `Show / Hide icon in menubar`
 - `Open at Login`
-- `Use generic Audio / Headset target`
-- `Target Bluetooth Address`
-- `Check`
 
-The app has two explicit targeting modes:
-
-- `Bluetooth address mode`
-  This is the default. Blocking stays unavailable until you enter a full Bluetooth address, and the app will only block a media-control HID endpoint that can be linked back to that exact address.
-- `Generic Audio / Headset mode`
-  This ignores the Bluetooth address field and matches a media-control HID endpoint with `Transport = Audio` and `Product = Headset`.
-
-The `Check` button tests the currently selected mode and shows whether the app found a matching media-control HID endpoint, plus rejection details when nothing matches.
-The check only confirms that a matching HID candidate exists. Runtime blocking still depends on macOS allowing the app to seize that endpoint.
-
-On first launch, the app opens Preferences with blocking turned off and no device configured yet.
+If the menu bar icon is hidden and you open the app manually from `/Applications`, the app opens Settings without restoring the icon. Re-enable the icon from Settings if you want it back in the menu bar.
 
 ## Permissions
 
-The app uses macOS HID APIs to inspect and seize the target headset’s media-control HID endpoint. For that to work, macOS may ask for:
+The supported path needs:
 
 - `Input Monitoring`
-  Allow the app in `System Settings > Privacy & Security > Input Monitoring`.
-- `Login Items` approval
-  If you turn on `Open at Login`, macOS may ask for approval in `System Settings > General > Login Items`.
+  Needed so the app can observe HID play/pause presses.
+- `Automation` for `Music`
+  Needed because the approved play/pause command is forwarded to Apple Music through AppleScript.
 
-The app does not rely on an Accessibility event tap for its main blocking behavior.
-
-## Finding Your Headset Address
-
-If you need to change the target device, run:
-
-```bash
-system_profiler SPBluetoothDataType
-```
-
-Look for your headset entry. Example:
-
-```text
-MOMENTUM 4:
-    Address: 80:C3:BA:82:06:6B
-```
-
-Copy that Bluetooth address into the `Target Bluetooth Address` field in Preferences.
-
-If the exact Bluetooth address cannot be linked to any exposed media-control HID endpoint on your Mac, you can switch to `Use generic Audio / Headset target` and use `Check` again.
+Enable blocking from Settings to trigger the permission flow. On some systems macOS may still require one relaunch after both permissions are granted.
 
 ## Building The App
 
 You do not need Xcode for this repo. Command Line Tools are enough.
 
-1. Build the release `.app` bundle:
+Build the signed release app bundle:
 
 ```bash
 ./scripts/build-app.sh
 ```
 
-2. The signed app will be created at:
+The result is:
 
 ```text
 dist/Momentum4PlayPauseBlock.app
 ```
 
-3. Move it to `/Applications` if you want it to behave like a normal installed app.
+## Main CLI
+
+`Momentum4PlayPauseBlockCLI` uses the same Apple Music-only proxy path as the menu bar app, but it stays in the foreground and does not use the app’s stored settings.
+
+Examples:
+
+```bash
+./scripts/sign-built-product.sh Momentum4PlayPauseBlockCLI debug
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --forward-source any-keyboard
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --forward-source specific-product-name --product-name "Keychron K1 Pro"
+```
+
+CLI details are in [docs/cli.md](/Users/guilhem/Documents/projects/github/momentum4_playpause_block/docs/cli.md:1).
 
 ## Developer Notes
 
-Useful command-line workflows:
+Useful commands:
 
 ```bash
 ./scripts/sign-built-product.sh Momentum4PlayPauseBlock debug
-./scripts/run-signed-product.sh Momentum4PlayPauseBlock debug
 ./scripts/sign-built-product.sh Momentum4PlayPauseBlockCLI debug
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --bluetooth-address 80:C3:BA:82:06:6B
 ./scripts/swift-package.sh test
 ./scripts/build-app.sh
 ```
 
-### CLI Tool
-
-The repo also includes a foreground CLI tool named `Momentum4PlayPauseBlockCLI`.
-
-- It blocks the configured Bluetooth headset while the process is running.
-- It can also run in `--log-events` mode, where it logs incoming consumer-control events from the matched endpoint without blocking them.
-- It does not share settings with the menu bar app.
-- It can run in either strict Bluetooth-address mode or generic `Audio / Headset` mode, but not both at once.
-- It requires the same HID/Input Monitoring permission, but the permission is granted to the terminal app that launches it.
-- For development builds, use the signed build and run scripts so recompiles keep the same code identity in macOS.
-
-Developer docs for the CLI are in [docs/cli.md](/Users/guilhem/Documents/projects/github/momentum4_playpause_block/docs/cli.md:1).
-
-### Signing
-
-The packaging script signs the app with:
-
-```text
-My Swift Dev Cert
-```
-
-The VS Code build tasks now sign the debug and release executables with the same certificate, so a rebuild does not turn them back into a new unsigned binary from macOS's point of view.
-
-Override it if needed:
-
-```bash
-SIGNING_IDENTITY="Your Certificate Name" ./scripts/build-app.sh
-```
-
-The script fails fast if the configured certificate is missing, because `Open at Login` requires a properly signed app bundle.
-
-### VS Code
-
-VS Code tasks are included for:
-
-- Building the app target
-- Running the app target
-- Building the CLI target
-- Running the CLI target
-- Running the package test suite
-- Building the signed `.app` bundle
+The package still contains an internal diagnostic executable for experimentation, but it is intentionally not part of the documented or surfaced production workflow.
