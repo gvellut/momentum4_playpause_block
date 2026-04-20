@@ -29,7 +29,7 @@ struct Momentum4PlayPauseBlockCLIExecutable {
         let application = CLIApplication(arguments: parsedArguments)
         application.installSignalHandlers()
         application.start()
-        RunLoop.main.run()
+        RunLoop.main.run() 
     }
 }
 
@@ -67,20 +67,24 @@ final class CLIApplication {
     }
 
     func start() {
-        writeLine(
-            "Blocking consumer-control events for \(arguments.startupDescription). Press Control-C to stop."
-        )
+        writeLine(startupMessage)
 
         blocker.statusDidChange = { [weak self] status in
             Task { @MainActor in
                 self?.handle(status: status)
             }
         }
+        blocker.inputEventDidReceive = { [weak self] event in
+            Task { @MainActor in
+                self?.handle(inputEvent: event)
+            }
+        }
 
         blocker.apply(
             configuration: BlockerConfiguration(
                 isEnabled: true,
-                target: arguments.target
+                target: arguments.target,
+                operationMode: arguments.operationMode
             )
         )
     }
@@ -104,11 +108,12 @@ final class CLIApplication {
         }
 
         isStopping = true
-        writeLine("Stopping blocker.")
+        writeLine("Stopping.")
         blocker.apply(
             configuration: BlockerConfiguration(
                 isEnabled: false,
-                target: arguments.target
+                target: arguments.target,
+                operationMode: arguments.operationMode
             )
         )
         finish(.success)
@@ -123,5 +128,34 @@ final class CLIApplication {
     private func writeLine(_ message: String, toStandardError: Bool = false) {
         let stream = toStandardError ? stderr : stdout
         fputs("\(message)\n", stream)
+    }
+
+    private var startupMessage: String {
+        switch arguments.operationMode {
+        case .block:
+            return
+                "Blocking consumer-control events for \(arguments.startupDescription). Press Control-C to stop."
+        case .logEvents:
+            return
+                "Logging consumer-control events for \(arguments.startupDescription). Press Control-C to stop."
+        }
+    }
+
+    private func handle(inputEvent: HIDInputEvent) {
+        guard arguments.operationMode == .logEvents else {
+            return
+        }
+
+        writeLine(formatted(inputEvent: inputEvent))
+    }
+
+    private func formatted(inputEvent: HIDInputEvent) -> String {
+        let deviceSummary = inputEvent.device.displaySummary.isEmpty
+            ? (inputEvent.device.product ?? "Unknown Device")
+            : inputEvent.device.displaySummary
+        let label = inputEvent.actionLabel ?? "Unknown"
+
+        return
+            "Event action=\(label) usagePage=\(inputEvent.usagePage) usage=\(inputEvent.usage) value=\(inputEvent.value) timestamp=\(inputEvent.timestamp) device=\(deviceSummary)"
     }
 }

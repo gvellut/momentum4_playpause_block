@@ -15,7 +15,7 @@ enum CLIStatusAction: Equatable {
 struct CLIStatusInterpreter {
     func action(for status: BlockerStatus) -> CLIStatusAction {
         switch status {
-        case .requestingPermission, .waitingForTarget, .blocking:
+        case .requestingPermission, .waitingForTarget, .blocking, .observing:
             return .keepRunning
         case .disabled, .permissionDenied, .error:
             return .exit(.runtimeFailure)
@@ -26,7 +26,7 @@ struct CLIStatusInterpreter {
         switch status {
         case .permissionDenied, .error:
             return true
-        case .disabled, .requestingPermission, .waitingForTarget, .blocking:
+        case .disabled, .requestingPermission, .waitingForTarget, .blocking, .observing:
             return false
         }
     }

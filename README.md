@@ -33,6 +33,7 @@ The app has two explicit targeting modes:
   This ignores the Bluetooth address field and matches a media-control HID endpoint with `Transport = Audio` and `Product = Headset`.
 
 The `Check` button tests the currently selected mode and shows whether the app found a matching media-control HID endpoint, plus rejection details when nothing matches.
+The check only confirms that a matching HID candidate exists. Runtime blocking still depends on macOS allowing the app to seize that endpoint.
 
 On first launch, the app opens Preferences with blocking turned off and no device configured yet.
 
@@ -102,6 +103,7 @@ Useful command-line workflows:
 The repo also includes a foreground CLI tool named `Momentum4PlayPauseBlockCLI`.
 
 - It blocks the configured Bluetooth headset while the process is running.
+- It can also run in `--log-events` mode, where it logs incoming consumer-control events from the matched endpoint without blocking them.
 - It does not share settings with the menu bar app.
 - It can run in either strict Bluetooth-address mode or generic `Audio / Headset` mode, but not both at once.
 - It requires the same HID/Input Monitoring permission, but the permission is granted to the terminal app that launches it.

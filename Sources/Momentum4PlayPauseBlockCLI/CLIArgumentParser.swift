@@ -3,6 +3,7 @@ import Momentum4PlayPauseBlockCommon
 
 struct CLIArguments: Equatable {
     let target: BlockerTarget
+    let operationMode: BlockerOperationMode
 
     var startupDescription: String {
         switch target {
@@ -46,6 +47,7 @@ struct CLIArgumentParser {
     func parse(_ arguments: [String]) throws -> CLIArguments {
         var bluetoothAddressCandidate: String?
         var wantsGenericAudioHeadset = false
+        var operationMode: BlockerOperationMode = .block
         var index = arguments.startIndex
 
         while index < arguments.endIndex {
@@ -65,6 +67,9 @@ struct CLIArgumentParser {
             case "--generic-audio-headset":
                 wantsGenericAudioHeadset = true
                 index = arguments.index(after: index)
+            case "--log-events":
+                operationMode = .logEvents
+                index = arguments.index(after: index)
             default:
                 if argument.hasPrefix("--bluetooth-address=") {
                     bluetoothAddressCandidate = String(argument.dropFirst("--bluetooth-address=".count))
@@ -81,7 +86,7 @@ struct CLIArgumentParser {
         }
 
         if wantsGenericAudioHeadset {
-            return CLIArguments(target: .genericAudioHeadset)
+            return CLIArguments(target: .genericAudioHeadset, operationMode: operationMode)
         }
 
         guard let bluetoothAddressCandidate else {
@@ -92,7 +97,10 @@ struct CLIArgumentParser {
             throw CLIArgumentParserError.invalidBluetoothAddress(bluetoothAddressCandidate)
         }
 
-        return CLIArguments(target: .bluetoothAddress(bluetoothAddress))
+        return CLIArguments(
+            target: .bluetoothAddress(bluetoothAddress),
+            operationMode: operationMode
+        )
     }
 }
 
@@ -102,15 +110,19 @@ enum CLIUsage {
         Usage:
           \(executableName) --bluetooth-address 80:C3:BA:82:06:6B
           \(executableName) --generic-audio-headset
+          \(executableName) --bluetooth-address 80:C3:BA:82:06:6B --log-events
 
         Choose exactly one:
           --bluetooth-address   The Bluetooth address of the headset to block.
           --generic-audio-headset
                                 Match the generic Audio / Headset HID endpoint.
 
+        Optional mode:
+          --log-events          Observe and log matching HID events instead of blocking them.
+
         Notes:
           - The CLI keeps running in the foreground until you stop it with Control-C.
-          - macOS Input Monitoring permission is required before HID blocking can work.
+          - macOS Input Monitoring permission is required before HID inspection can work.
         """
     }
 }

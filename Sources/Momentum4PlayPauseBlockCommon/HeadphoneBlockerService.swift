@@ -1,5 +1,4 @@
 import Foundation
-import IOBluetooth
 import IOKit.hid
 import IOKit.hidsystem
 
@@ -9,6 +8,7 @@ public enum BlockerStatus: Equatable, Sendable {
     case permissionDenied
     case waitingForTarget(String)
     case blocking(String)
+    case observing(String)
     case error(String)
 
     public var message: String {
@@ -25,6 +25,8 @@ public enum BlockerStatus: Equatable, Sendable {
             return message
         case .blocking(let deviceName):
             return "Blocking media-control events from \(deviceName)."
+        case .observing(let deviceName):
+            return "Logging media-control events from \(deviceName)."
         case .error(let message):
             return message
         }
@@ -34,16 +36,24 @@ public enum BlockerStatus: Equatable, Sendable {
 public struct BlockerConfiguration: Equatable, Sendable {
     public let isEnabled: Bool
     public let target: BlockerTarget?
+    public let operationMode: BlockerOperationMode
 
-    public init(isEnabled: Bool, target: BlockerTarget? = nil) {
+    public init(
+        isEnabled: Bool,
+        target: BlockerTarget? = nil,
+        operationMode: BlockerOperationMode = .block
+    ) {
         self.isEnabled = isEnabled
         self.target = target
+        self.operationMode = operationMode
     }
 }
 
 @MainActor
 public protocol HeadphoneBlockerControlling: AnyObject {
     var statusDidChange: ((BlockerStatus) -> Void)? { get set }
+    var inputEventDidReceive: ((HIDInputEvent) -> Void)? { get set }
+
     func apply(configuration: BlockerConfiguration)
     func check(target: BlockerTarget?) -> BlockerCheckResult
 }
@@ -51,38 +61,41 @@ public protocol HeadphoneBlockerControlling: AnyObject {
 @MainActor
 public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
     public var statusDidChange: ((BlockerStatus) -> Void)?
+    public var inputEventDidReceive: ((HIDInputEvent) -> Void)?
 
-    private let manager: IOHIDManager
+    private let hidEnvironment: HIDEnvironment
     private let bluetoothResolver: BluetoothDeviceResolving
     private let matcher: HIDDeviceMatcher
     private var configuration: BlockerConfiguration
     private var managerIsOpen = false
-    private var seizedDevices: [io_service_t: IOHIDDevice] = [:]
+    private var activeSessions: [io_service_t: ActiveSession] = [:]
 
-    public init(
+    public convenience init(
         bluetoothResolver: BluetoothDeviceResolving = SystemBluetoothDeviceResolver(),
         matcher: HIDDeviceMatcher = HIDDeviceMatcher()
     ) {
-        self.manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        self.init(
+            bluetoothResolver: bluetoothResolver,
+            matcher: matcher,
+            hidEnvironment: SystemHIDEnvironment()
+        )
+    }
+
+    init(
+        bluetoothResolver: BluetoothDeviceResolving,
+        matcher: HIDDeviceMatcher,
+        hidEnvironment: HIDEnvironment
+    ) {
+        self.hidEnvironment = hidEnvironment
         self.bluetoothResolver = bluetoothResolver
         self.matcher = matcher
-        self.configuration = BlockerConfiguration(
-            isEnabled: false,
-            target: nil
-        )
+        self.configuration = BlockerConfiguration(isEnabled: false, target: nil)
 
-        let matchingDictionary: [String: Any] = [
-            kIOHIDDeviceUsagePageKey: Int(kHIDPage_Consumer),
-            kIOHIDDeviceUsageKey: Int(kHIDUsage_Csmr_ConsumerControl),
-        ]
-
-        IOHIDManagerSetDeviceMatching(manager, matchingDictionary as CFDictionary)
-
-        let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        IOHIDManagerRegisterDeviceMatchingCallback(manager, Self.deviceMatchingCallback, context)
-        IOHIDManagerRegisterDeviceRemovalCallback(manager, Self.deviceRemovalCallback, context)
-        IOHIDManagerScheduleWithRunLoop(
-            manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        hidEnvironment.devicesDidChange = { [weak self] in
+            Task { @MainActor in
+                self?.reconcileState()
+            }
+        }
     }
 
     public func apply(configuration: BlockerConfiguration) {
@@ -120,27 +133,27 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
 
     private func reconcileState() {
         guard configuration.isEnabled else {
-            releaseAllSeizedDevices()
+            releaseAllActiveSessions()
             closeManagerIfNeeded()
             publishStatus(.disabled)
             return
         }
 
         guard ensureListenPermission() else {
-            releaseAllSeizedDevices()
+            releaseAllActiveSessions()
             closeManagerIfNeeded()
             return
         }
 
         guard let target = configuration.target else {
-            releaseAllSeizedDevices()
+            releaseAllActiveSessions()
             closeManagerIfNeeded()
             publishStatus(.error("No target is configured for blocking."))
             return
         }
 
         guard openManagerIfNeeded() else {
-            releaseAllSeizedDevices()
+            releaseAllActiveSessions()
             publishStatus(.error("The HID manager could not be opened."))
             return
         }
@@ -149,12 +162,12 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
     }
 
     private func ensureListenPermission() -> Bool {
-        switch IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) {
+        switch hidEnvironment.checkListenAccess() {
         case kIOHIDAccessTypeGranted:
             return true
         case kIOHIDAccessTypeDenied, kIOHIDAccessTypeUnknown:
             publishStatus(.requestingPermission)
-            let granted = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            let granted = hidEnvironment.requestListenAccess()
             if !granted {
                 publishStatus(.permissionDenied)
             }
@@ -170,7 +183,7 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             return true
         }
 
-        let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        let result = hidEnvironment.openManager()
         guard result == kIOReturnSuccess else {
             return false
         }
@@ -184,7 +197,7 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             return
         }
 
-        IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        hidEnvironment.closeManager()
         managerIsOpen = false
     }
 
@@ -192,29 +205,126 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         let evaluation = evaluation(for: target)
 
         guard let matches = evaluation.matchedCandidates else {
-            releaseAllSeizedDevices()
+            releaseAllActiveSessions()
             publishStatus(.waitingForTarget(evaluation.checkResult.message))
             return
         }
 
-        var matchingServiceIDs = Set<io_service_t>()
+        var activatedServiceIDs = Set<io_service_t>()
+        var activationFailures: [ActivationFailure] = []
 
         for candidate in matches {
-            matchingServiceIDs.insert(candidate.serviceID)
-            seizeDeviceIfNeeded(candidate.device, serviceID: candidate.serviceID)
+            switch activateCandidateIfNeeded(candidate, mode: configuration.operationMode) {
+            case .active(let session):
+                activatedServiceIDs.insert(session.serviceID)
+            case .failed(let failure):
+                activationFailures.append(failure)
+            }
         }
 
-        let serviceIDsToRelease = Set(seizedDevices.keys).subtracting(matchingServiceIDs)
+        let serviceIDsToRelease = Set(activeSessions.keys).subtracting(activatedServiceIDs)
         for serviceID in serviceIDsToRelease {
             releaseDevice(serviceID: serviceID)
         }
 
-        if let firstSnapshot = matches.first?.snapshot {
-            publishStatus(.blocking(blockingDeviceLabel(for: firstSnapshot, target: target)))
+        if let firstActiveSession = matches.compactMap({ activeSessions[$0.serviceID] }).first {
+            publishStatus(
+                statusForActiveSession(
+                    snapshot: firstActiveSession.snapshot,
+                    target: target,
+                    mode: firstActiveSession.mode
+                )
+            )
+            return
+        }
+
+        if !activationFailures.isEmpty {
+            publishStatus(
+                .error(
+                    activationFailureMessage(
+                        target: target,
+                        mode: configuration.operationMode,
+                        failures: activationFailures
+                    )
+                )
+            )
             return
         }
 
         publishStatus(.waitingForTarget(evaluation.checkResult.message))
+    }
+
+    private func activateCandidateIfNeeded(
+        _ candidate: MatchedCandidate,
+        mode: BlockerOperationMode
+    ) -> ActivationResult {
+        if let existingSession = activeSessions[candidate.serviceID] {
+            if existingSession.mode == mode {
+                return .active(existingSession)
+            }
+
+            releaseDevice(serviceID: candidate.serviceID)
+        }
+
+        switch mode {
+        case .block:
+            return activateBlockingCandidate(candidate)
+        case .logEvents:
+            return activateLoggingCandidate(candidate)
+        }
+    }
+
+    private func activateBlockingCandidate(_ candidate: MatchedCandidate) -> ActivationResult {
+        let result = candidate.device.open(options: IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
+        guard result == kIOReturnSuccess else {
+            return .failed(
+                ActivationFailure(
+                    serviceID: candidate.serviceID,
+                    snapshot: candidate.snapshot,
+                    mode: .block,
+                    openResult: result
+                )
+            )
+        }
+
+        let session = ActiveSession(
+            device: candidate.device,
+            serviceID: candidate.serviceID,
+            snapshot: candidate.snapshot,
+            mode: .block
+        )
+        activeSessions[candidate.serviceID] = session
+        return .active(session)
+    }
+
+    private func activateLoggingCandidate(_ candidate: MatchedCandidate) -> ActivationResult {
+        candidate.device.setInputValueHandler { [weak self] event in
+            self?.inputEventDidReceive?(event)
+        }
+        candidate.device.scheduleWithMainRunLoop()
+
+        let result = candidate.device.open(options: IOOptionBits(kIOHIDOptionsTypeNone))
+        guard result == kIOReturnSuccess else {
+            candidate.device.unscheduleFromMainRunLoop()
+            candidate.device.setInputValueHandler(nil)
+            return .failed(
+                ActivationFailure(
+                    serviceID: candidate.serviceID,
+                    snapshot: candidate.snapshot,
+                    mode: .logEvents,
+                    openResult: result
+                )
+            )
+        }
+
+        let session = ActiveSession(
+            device: candidate.device,
+            serviceID: candidate.serviceID,
+            snapshot: candidate.snapshot,
+            mode: .logEvents
+        )
+        activeSessions[candidate.serviceID] = session
+        return .active(session)
     }
 
     private func evaluation(for target: BlockerTarget) -> TargetEvaluation {
@@ -222,7 +332,6 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         case .bluetoothAddress(let address):
             guard let targetDevice = bluetoothResolver.resolve(address: address) else {
                 return TargetEvaluation(
-                    target: target,
                     checkResult: BlockerCheckResult(
                         target: target,
                         matchedDevice: nil,
@@ -234,7 +343,6 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
 
             guard targetDevice.isConnected else {
                 return TargetEvaluation(
-                    target: target,
                     checkResult: BlockerCheckResult(
                         target: target,
                         matchedDevice: nil,
@@ -267,9 +375,9 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         noDevicesMessage: String,
         noMatchMessage: String
     ) -> TargetEvaluation {
-        guard let rawDevices = IOHIDManagerCopyDevices(manager) else {
+        let devices = hidEnvironment.currentDevices()
+        guard !devices.isEmpty else {
             return TargetEvaluation(
-                target: target,
                 checkResult: BlockerCheckResult(
                     target: target,
                     matchedDevice: nil,
@@ -279,18 +387,16 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
             )
         }
 
-        let devices = (rawDevices as NSSet).allObjects.map { $0 as! IOHIDDevice }
         var matchedCandidates: [MatchedCandidate] = []
         var rejectionMessages: [String] = []
 
         for device in devices {
-            let snapshot = HIDDeviceSnapshot(device: device)
+            let snapshot = device.snapshot
             let matchResult = matcher.match(device: snapshot, target: target)
 
             switch matchResult {
             case .matched:
-                let service = IOHIDDeviceGetService(device)
-                guard service != IO_OBJECT_NULL else {
+                guard device.serviceID != IO_OBJECT_NULL else {
                     rejectionMessages.append(
                         rejectionMessage(
                             for: snapshot,
@@ -301,7 +407,11 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
                 }
 
                 matchedCandidates.append(
-                    MatchedCandidate(device: device, serviceID: service, snapshot: snapshot)
+                    MatchedCandidate(
+                        device: device,
+                        serviceID: device.serviceID,
+                        snapshot: snapshot
+                    )
                 )
 
             case .rejected(let reason):
@@ -311,7 +421,6 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
 
         guard let firstMatch = matchedCandidates.first else {
             return TargetEvaluation(
-                target: target,
                 checkResult: BlockerCheckResult(
                     target: target,
                     matchedDevice: nil,
@@ -323,11 +432,10 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         }
 
         return TargetEvaluation(
-            target: target,
             checkResult: BlockerCheckResult(
                 target: target,
                 matchedDevice: firstMatch.snapshot,
-                message: "Found matching media-control HID endpoint for \(target.summary).",
+                message: "Found matching media-control HID candidate for \(target.summary).",
                 rejectionMessages: rejectionMessages
             ),
             matchedCandidates: matchedCandidates
@@ -343,38 +451,71 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
         return "\(summary): \(reason)"
     }
 
-    private func blockingDeviceLabel(for snapshot: HIDDeviceSnapshot, target: BlockerTarget) -> String {
+    private func statusForActiveSession(
+        snapshot: HIDDeviceSnapshot,
+        target: BlockerTarget,
+        mode: BlockerOperationMode
+    ) -> BlockerStatus {
+        let label = activeDeviceLabel(for: snapshot, target: target)
+
+        switch mode {
+        case .block:
+            return .blocking(label)
+        case .logEvents:
+            return .observing(label)
+        }
+    }
+
+    private func activeDeviceLabel(for snapshot: HIDDeviceSnapshot, target: BlockerTarget) -> String {
         switch target {
         case .bluetoothAddress(let address):
             return snapshot.product ?? snapshot.serialNumber ?? address.rawValue
         case .genericAudioHeadset:
-            return snapshot.product ?? target.summary
+            let summary = snapshot.displaySummary
+            return summary.isEmpty ? (snapshot.product ?? target.summary) : summary
         }
     }
 
-    private func seizeDeviceIfNeeded(_ device: IOHIDDevice, serviceID: io_service_t) {
-        guard seizedDevices[serviceID] == nil else {
-            return
+    private func activationFailureMessage(
+        target: BlockerTarget,
+        mode: BlockerOperationMode,
+        failures: [ActivationFailure]
+    ) -> String {
+        let modeDescription = switch mode {
+        case .block:
+            "seize"
+        case .logEvents:
+            "open for event logging"
         }
 
-        let result = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
-        guard result == kIOReturnSuccess else {
-            return
+        let details = failures.map { failure in
+            "\(failure.deviceSummary): \(modeDescription) failed with \(formatIOReturn(failure.openResult))."
         }
+        .joined(separator: " ")
 
-        seizedDevices[serviceID] = device
+        return "Matched \(target.summary), but could not activate any media-control HID endpoint. \(details)"
+    }
+
+    private func formatIOReturn(_ result: IOReturn) -> String {
+        let hex = String(UInt32(bitPattern: result), radix: 16, uppercase: true)
+        return "\(result) (0x\(hex))"
     }
 
     private func releaseDevice(serviceID: io_service_t) {
-        guard let device = seizedDevices.removeValue(forKey: serviceID) else {
+        guard let session = activeSessions.removeValue(forKey: serviceID) else {
             return
         }
 
-        IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+        if session.mode == .logEvents {
+            session.device.setInputValueHandler(nil)
+            session.device.unscheduleFromMainRunLoop()
+        }
+
+        session.device.close()
     }
 
-    private func releaseAllSeizedDevices() {
-        let serviceIDs = Array(seizedDevices.keys)
+    private func releaseAllActiveSessions() {
+        let serviceIDs = Array(activeSessions.keys)
         for serviceID in serviceIDs {
             releaseDevice(serviceID: serviceID)
         }
@@ -383,42 +524,43 @@ public final class HeadphoneBlockerService: HeadphoneBlockerControlling {
     private func publishStatus(_ status: BlockerStatus) {
         statusDidChange?(status)
     }
+}
 
-    private static let deviceMatchingCallback: IOHIDDeviceCallback = { context, _, _, _ in
-        guard let context else {
-            return
+private struct ActiveSession {
+    let device: HIDDeviceControlling
+    let serviceID: io_service_t
+    let snapshot: HIDDeviceSnapshot
+    let mode: BlockerOperationMode
+}
+
+private struct ActivationFailure {
+    let serviceID: io_service_t
+    let snapshot: HIDDeviceSnapshot
+    let mode: BlockerOperationMode
+    let openResult: IOReturn
+
+    var deviceSummary: String {
+        let summary = snapshot.displaySummary
+        guard !summary.isEmpty else {
+            return "service \(serviceID)"
         }
 
-        let service = Unmanaged<HeadphoneBlockerService>.fromOpaque(context).takeUnretainedValue()
-        Task { @MainActor in
-            service.reconcileState()
-        }
-    }
-
-    private static let deviceRemovalCallback: IOHIDDeviceCallback = { context, _, _, device in
-        guard let context else {
-            return
-        }
-
-        let serviceID = IOHIDDeviceGetService(device)
-        let service = Unmanaged<HeadphoneBlockerService>.fromOpaque(context).takeUnretainedValue()
-        Task { @MainActor in
-            if serviceID != IO_OBJECT_NULL {
-                service.releaseDevice(serviceID: serviceID)
-            }
-            service.reconcileState()
-        }
+        return summary
     }
 }
 
+private enum ActivationResult {
+    case active(ActiveSession)
+    case failed(ActivationFailure)
+}
+
 private struct MatchedCandidate {
-    let device: IOHIDDevice
+    let device: HIDDeviceControlling
     let serviceID: io_service_t
     let snapshot: HIDDeviceSnapshot
 }
 
 private struct TargetEvaluation {
-    let target: BlockerTarget
     let checkResult: BlockerCheckResult
     let matchedCandidates: [MatchedCandidate]?
 }

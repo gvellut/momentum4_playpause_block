@@ -154,7 +154,7 @@ struct AppSettingsStoreTests {
                 usage: 1,
                 locationID: nil
             ),
-            message: "Found matching media-control HID endpoint for generic Audio / Headset."
+            message: "Found matching media-control HID candidate for generic Audio / Headset."
         )
         blocker.nextCheckResult = expectedResult
 
@@ -217,6 +217,7 @@ struct AppSettingsStoreTests {
 @MainActor
 private final class MockBlockerController: HeadphoneBlockerControlling {
     var statusDidChange: ((BlockerStatus) -> Void)?
+    var inputEventDidReceive: ((HIDInputEvent) -> Void)?
     var configurations: [BlockerConfiguration] = []
     var checkedTargets: [BlockerTarget?] = []
     var nextCheckResult = BlockerCheckResult(

@@ -11,6 +11,12 @@ Choose exactly one target mode when you run it:
 
 Those two flags are mutually exclusive.
 
+You can optionally add:
+
+- `--log-events`
+
+In `--log-events` mode, the CLI does not seize the matching HID endpoint. It opens the device non-exclusively and prints each received consumer-control event while macOS continues to handle the events normally.
+
 ## Permissions
 
 The CLI also needs macOS permission to inspect HID media events.
@@ -65,6 +71,12 @@ Or run it against the generic `Audio / Headset` endpoint:
 ./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --generic-audio-headset
 ```
 
+Or log events instead of blocking them:
+
+```bash
+./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --generic-audio-headset --log-events
+```
+
 The CLI stays in the foreground and keeps watching for the matching HID endpoint. Stop it with `Control-C`.
 
 If the device is not connected yet, the CLI stays alive and waits until the headset appears.
@@ -87,6 +99,12 @@ Or:
 
 ```bash
 <bin-path>/Momentum4PlayPauseBlockCLI --generic-audio-headset
+```
+
+Or:
+
+```bash
+<bin-path>/Momentum4PlayPauseBlockCLI --bluetooth-address 80:C3:BA:82:06:6B --log-events
 ```
 
 For repeat use outside development, a release build is the better default.

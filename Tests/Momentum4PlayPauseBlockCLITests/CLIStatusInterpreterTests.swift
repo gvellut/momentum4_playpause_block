@@ -11,6 +11,11 @@ struct CLIStatusInterpreterTests {
     }
 
     @Test
+    func observingStatusKeepsProcessRunning() {
+        #expect(interpreter.action(for: .observing("Headset")) == .keepRunning)
+    }
+
+    @Test
     func permissionDeniedExitsWithRuntimeFailure() {
         #expect(interpreter.action(for: .permissionDenied) == .exit(.runtimeFailure))
     }
@@ -19,5 +24,6 @@ struct CLIStatusInterpreterTests {
     func runtimeErrorsWriteToStandardError() {
         #expect(interpreter.writesToStandardError(.error("boom")))
         #expect(!interpreter.writesToStandardError(.waitingForTarget("waiting")))
+        #expect(!interpreter.writesToStandardError(.observing("Headset")))
     }
 }
