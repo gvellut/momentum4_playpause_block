@@ -32,8 +32,10 @@ struct PlaybackProxyServiceTests {
         await Task.yield()
         runtime.emit(.togglePlayPause)
         runtime.emit(.togglePlayPause)
+        try? await Task.sleep(for: .milliseconds(20))
 
         #expect(appleMusic.sentCommands == [.togglePlayPause])
+        #expect(runtime.reassertNowPlayingStateCalls == 3)
     }
 
     @Test
@@ -152,6 +154,83 @@ struct PlaybackProxyServiceTests {
         #expect(appleMusic.sentCommands == [.togglePlayPause])
     }
 
+    @Test
+    func disableThenReenableStartsFreshRuntimeAgain() {
+        let environment = FakeHIDEnvironment()
+        let appleMusic = FakeAppleMusicController()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: environment,
+            appleMusicController: appleMusic,
+            proxyFactory: { runtimes.removeFirst() }
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID
+            )
+        )
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: false,
+                allowedForwardSourceMode: .anyHID
+            )
+        )
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID
+            )
+        )
+
+        #expect(firstRuntime.startCalls == 1)
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+    }
+
+    @Test
+    func forwardedCommandRestartsProxyRuntimeToReclaimOwnership() async {
+        let environment = FakeHIDEnvironment()
+        let device = FakeHIDDevice(serviceID: 6, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        environment.devices = [device]
+        let appleMusic = FakeAppleMusicController()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: environment,
+            appleMusicController: appleMusic,
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipRecoveryDelays: [0.001, 0.002]
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyKeyboard
+            )
+        )
+        device.emitInput(
+            usagePage: Int(kHIDPage_Consumer),
+            usage: Int(kHIDUsage_Csmr_PlayOrPause),
+            value: 1,
+            timestamp: 6
+        )
+        await Task.yield()
+        firstRuntime.emit(.togglePlayPause)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(appleMusic.sentCommands == [.togglePlayPause])
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
+    }
+
     private func makeService(
         environment: FakeHIDEnvironment,
         appleMusic: FakeAppleMusicController,
@@ -160,7 +239,8 @@ struct PlaybackProxyServiceTests {
         PlaybackProxyService(
             hidEnvironment: environment,
             appleMusicController: appleMusic,
-            proxyFactory: { runtime }
+            proxyFactory: { runtime },
+            ownershipRecoveryDelays: [0.001, 0.002]
         )
     }
 }
@@ -184,14 +264,23 @@ private final class FakeAppleMusicController: AppleMusicControlling {
 @MainActor
 private final class FakeNowPlayingProxyRuntime: NowPlayingProxyRuntimeControlling {
     private var commandHandler: ((ProxyRemoteCommand) -> Void)?
+    private(set) var startCalls = 0
+    private(set) var stopCalls = 0
+    private(set) var reassertNowPlayingStateCalls = 0
 
     func start(commandHandler: @escaping (ProxyRemoteCommand) -> Void) -> Bool {
+        startCalls += 1
         self.commandHandler = commandHandler
         return true
     }
 
     func stop() {
+        stopCalls += 1
         commandHandler = nil
+    }
+
+    func reassertNowPlayingState() {
+        reassertNowPlayingStateCalls += 1
     }
 
     func emit(_ command: ProxyRemoteCommand) {

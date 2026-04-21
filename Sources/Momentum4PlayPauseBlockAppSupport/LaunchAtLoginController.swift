@@ -48,10 +48,22 @@ public final class LaunchAtLoginController: LaunchAtLoginControlling {
     public init() {}
 
     public func currentStatus() -> LaunchAtLoginStatus {
-        mapStatus(SMAppService.mainApp.status)
+        guard isRunningFromAppBundle else {
+            return .unavailable(
+                "Launch at Login is unavailable in this debug run. Build and open the signed .app bundle before enabling it."
+            )
+        }
+
+        return mapStatus(SMAppService.mainApp.status)
     }
 
     public func setEnabled(_ enabled: Bool) -> LaunchAtLoginStatus {
+        guard isRunningFromAppBundle else {
+            return .unavailable(
+                "Launch at Login is unavailable in this debug run. Build and open the signed .app bundle before enabling it."
+            )
+        }
+
         do {
             if enabled {
                 try SMAppService.mainApp.register()
@@ -93,5 +105,9 @@ public final class LaunchAtLoginController: LaunchAtLoginControlling {
         @unknown default:
             return .unavailable("Launch at Login returned an unknown system state.")
         }
+    }
+
+    private var isRunningFromAppBundle: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
     }
 }

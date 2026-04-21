@@ -16,6 +16,7 @@ struct AppSettingsStoreTests {
         )
 
         #expect(!store.blockingEnabled)
+        #expect(!store.blockingRequested)
         #expect(store.showMenuBarIcon)
         #expect(!store.openAtLogin)
         #expect(store.allowedForwardSourceMode == .anyHID)
@@ -35,9 +36,10 @@ struct AppSettingsStoreTests {
         )
 
         store.allowedForwardSourceMode = .specificProductName
-        store.blockingEnabled = true
+        store.setBlockingEnabled(true)
 
         #expect(!store.blockingEnabled)
+        #expect(!store.blockingRequested)
         #expect(!store.canEnableBlocking)
         #expect(
             proxyController.configurations.last
@@ -47,6 +49,28 @@ struct AppSettingsStoreTests {
                     allowedForwardSourceProductName: ""
                 )
         )
+    }
+
+    @Test
+    func enablingWhilePermissionsArePendingKeepsRequestedStateOn() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        proxyController.appliedStatus = .requestingPermissions
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.setBlockingRequested(true)
+        await Task.yield()
+
+        #expect(!store.blockingEnabled)
+        #expect(store.blockingRequested)
+        #expect(store.proxyStatus == .requestingPermissions)
+        #expect(!store.shouldOfferRelaunchToFinishEnable)
+        #expect(proxyController.configurations.last?.enabled == true)
     }
 
     @Test
@@ -61,12 +85,59 @@ struct AppSettingsStoreTests {
             launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
         )
 
-        store.blockingEnabled = true
+        store.setBlockingEnabled(true)
+        await Task.yield()
+
+        #expect(!store.blockingEnabled)
+        #expect(store.blockingRequested)
+        #expect(store.proxyStatus == .inputMonitoringDenied)
+        #expect(store.shouldOfferRelaunchToFinishEnable)
+        #expect(proxyController.configurations.last?.enabled == true)
+    }
+
+    @Test
+    func activeStatusIsRequiredBeforeBlockingTurnsOn() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        proxyController.appliedStatus = .active("all HID sources")
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.setBlockingEnabled(true)
         await Task.yield()
 
         #expect(store.blockingEnabled)
-        #expect(store.proxyStatus == .inputMonitoringDenied)
-        #expect(proxyController.configurations.last?.enabled == true)
+        #expect(store.blockingRequested)
+        #expect(!store.shouldOfferRelaunchToFinishEnable)
+    }
+
+    @Test
+    func disablingClearsRequestedAndPendingActivationState() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        proxyController.appliedStatus = .inputMonitoringDenied
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.setBlockingRequested(true)
+        await Task.yield()
+
+        proxyController.appliedStatus = nil
+        store.setBlockingRequested(false)
+
+        #expect(!store.blockingEnabled)
+        #expect(!store.blockingRequested)
+        #expect(!store.shouldOfferRelaunchToFinishEnable)
+        #expect(store.proxyStatus == .disabled)
+        #expect(proxyController.configurations.last?.enabled == false)
     }
 
     @Test
@@ -90,9 +161,32 @@ struct AppSettingsStoreTests {
     }
 
     @Test
+    func captureFailureLeavesControlsUsableAndShowsInlineMessage() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.allowedForwardSourceMode = .specificProductName
+        store.toggleForwardSourceCapture()
+        proxyController.failCapture(message: "Could not read a product name from that source.")
+        await Task.yield()
+
+        #expect(!store.isCapturingForwardSource)
+        #expect(store.captureFeedbackMessage == "Could not read a product name from that source.")
+    }
+
+    @Test
     func manualLaunchWithHiddenIconOpensSettingsWithoutRestoringIcon() {
         let defaults = makeDefaults()
         defaults.set(false, forKey: AppSettingsKeys.showMenuBarIcon)
+        defaults.set(
+            true,
+            forKey: AppSettingsKeys.hasExplicitlyConfiguredMenuBarIconVisibility
+        )
 
         let store = AppSettingsStore(
             defaults: defaults,
@@ -105,6 +199,58 @@ struct AppSettingsStoreTests {
         )
         #expect(!store.showMenuBarIcon)
         #expect(store.shouldOpenSettingsOnReopen())
+    }
+
+    @Test
+    func legacyHiddenMenuBarStateIsIgnoredUntilUserExplicitlyChoosesIt() {
+        let defaults = makeDefaults()
+        defaults.set(false, forKey: AppSettingsKeys.showMenuBarIcon)
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: MockProxyController(),
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        #expect(store.showMenuBarIcon)
+    }
+
+    @Test
+    func relaunchRequiredStateRestoresRequestedStateFromDefaults() {
+        let defaults = makeDefaults()
+        defaults.set(true, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: MockProxyController(),
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        #expect(!store.blockingEnabled)
+        #expect(store.blockingRequested)
+        #expect(store.shouldOfferRelaunchToFinishEnable)
+        #expect(store.blockingStatusSummary == "Relaunch required to finish enabling.")
+    }
+
+    @Test
+    func restartBlockingIfRequestedReappliesProxyAfterRuntimeModeChange() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        proxyController.appliedStatus = .active("all HID sources")
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.setBlockingRequested(true)
+        await Task.yield()
+
+        proxyController.appliedStatus = nil
+        store.restartBlockingIfRequestedForRuntimeModeChange()
+
+        #expect(proxyController.configurations.suffix(2).map(\.enabled) == [false, true])
     }
 
     @Test
@@ -136,6 +282,7 @@ struct AppSettingsStoreTests {
 private final class MockProxyController: PlaybackProxyControlling {
     var statusDidChange: ((PlaybackProxyStatus) -> Void)?
     var sourceCaptureDidResolve: ((String) -> Void)?
+    var sourceCaptureDidFail: ((String) -> Void)?
     var configurations: [PlaybackProxyConfiguration] = []
     var appliedStatus: PlaybackProxyStatus?
     var beginSourceCaptureResult = true
@@ -161,6 +308,10 @@ private final class MockProxyController: PlaybackProxyControlling {
 
     func resolveCapture(productName: String) {
         sourceCaptureDidResolve?(productName)
+    }
+
+    func failCapture(message: String) {
+        sourceCaptureDidFail?(message)
     }
 }
 

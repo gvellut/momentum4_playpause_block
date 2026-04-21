@@ -22,6 +22,6 @@ public struct AppLaunchContext: Equatable, Sendable {
     }
 
     public func shouldOpenSettingsWhenMenuBarIconHidden(currentlyVisible: Bool) -> Bool {
-        !launchedAsLoginItem && !currentlyVisible
+        !launchedAsLoginItem
     }
 }

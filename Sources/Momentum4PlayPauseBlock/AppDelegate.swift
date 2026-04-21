@@ -1,28 +1,34 @@
 import AppKit
 import Momentum4PlayPauseBlockAppSupport
+import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var launchContext = AppLaunchContext(launchedAsLoginItem: false)
+    private var settingsWindowController: NSWindowController?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         launchContext = AppLaunchContext.detectFromCurrentAppleEvent()
+        setBackgroundActivationPolicy()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let settingsStore = AppRuntime.sharedStore
+        AppRuntime.sharedActions.registerOpenSettingsHandler { [weak self] in
+            self?.showSettingsWindow()
+        }
         settingsStore.refreshRuntimeState()
         settingsStore.handleFirstLaunchIfNeeded { [weak self] in
-            self?.showSettingsWindow()
+            self?.openSettingsLater()
         }
 
         if settingsStore.shouldOpenSettingsOnLaunch(for: launchContext) {
-            showSettingsWindow()
+            openSettingsLater()
         }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if AppRuntime.sharedStore.shouldOpenSettingsOnReopen() {
-            showSettingsWindow()
+            AppRuntime.sharedActions.openSettings()
         }
         return false
     }
@@ -32,8 +38,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    func showSettingsWindow() {
+    private func showSettingsWindow() {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let controller = settingsWindowController ?? makeSettingsWindowController()
+        settingsWindowController = controller
+
+        controller.showWindow(nil)
+        guard let window = controller.window else {
+            return
+        }
+
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         NSApplication.shared.activate(ignoringOtherApps: true)
-        NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+    }
+
+    @MainActor
+    private func makeSettingsWindowController() -> NSWindowController {
+        let hostingController = NSHostingController(
+            rootView: SettingsView(
+                settingsStore: AppRuntime.sharedStore,
+                appActions: AppRuntime.sharedActions
+            )
+        )
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Momentum4 PlayPause Block Preferences"
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.setContentSize(NSSize(width: 560, height: 520))
+        window.minSize = NSSize(width: 560, height: 520)
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.hidesOnDeactivate = false
+        window.collectionBehavior = [.moveToActiveSpace]
+        window.delegate = self
+        window.center()
+
+        return NSWindowController(window: window)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard
+            let window = notification.object as? NSWindow,
+            window == settingsWindowController?.window
+        else {
+            return
+        }
+
+        AppRuntime.sharedStore.cancelForwardSourceCapture()
+        settingsWindowController = nil
+        setBackgroundActivationPolicy()
+        AppRuntime.sharedStore.restartBlockingIfRequestedForRuntimeModeChange()
+    }
+
+    private func openSettingsLater() {
+        DispatchQueue.main.async {
+            AppRuntime.sharedActions.openSettings()
+        }
+    }
+
+    @MainActor
+    private func setBackgroundActivationPolicy() {
+        NSApplication.shared.setActivationPolicy(.prohibited)
     }
 }

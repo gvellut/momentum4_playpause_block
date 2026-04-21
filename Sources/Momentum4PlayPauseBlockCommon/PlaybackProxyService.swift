@@ -71,6 +71,7 @@ public enum PlaybackProxyStatus: Equatable, Sendable {
 public protocol PlaybackProxyControlling: AnyObject {
     var statusDidChange: ((PlaybackProxyStatus) -> Void)? { get set }
     var sourceCaptureDidResolve: ((String) -> Void)? { get set }
+    var sourceCaptureDidFail: ((String) -> Void)? { get set }
 
     func apply(configuration: PlaybackProxyConfiguration)
     @discardableResult
@@ -191,13 +192,18 @@ private final class AppleMusicController: AppleMusicControlling {
 protocol NowPlayingProxyRuntimeControlling: AnyObject {
     func start(commandHandler: @escaping (ProxyRemoteCommand) -> Void) -> Bool
     func stop()
+    func reassertNowPlayingState()
 }
 
 @MainActor
 private final class SystemNowPlayingProxyRuntime: NowPlayingProxyRuntimeControlling {
+    private static let ownershipKeepaliveInterval: TimeInterval = 1
+
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
     private var remoteCommandTokens: [(command: MPRemoteCommand, token: Any)] = []
+    private var ownershipKeepaliveTimer: Timer?
+    private var playbackStartedAt: Date?
     private var isStarted = false
 
     func start(commandHandler: @escaping (ProxyRemoteCommand) -> Void) -> Bool {
@@ -212,7 +218,9 @@ private final class SystemNowPlayingProxyRuntime: NowPlayingProxyRuntimeControll
             return false
         }
 
+        playbackStartedAt = Date()
         publishNowPlayingState()
+        startOwnershipKeepalive()
         installRemoteCommandHandlers(commandHandler: commandHandler)
         isStarted = true
         return true
@@ -224,16 +232,25 @@ private final class SystemNowPlayingProxyRuntime: NowPlayingProxyRuntimeControll
         }
         remoteCommandTokens.removeAll(keepingCapacity: false)
 
+        ownershipKeepaliveTimer?.invalidate()
+        ownershipKeepaliveTimer = nil
+
         playerNode.stop()
         engine.stop()
-        if engine.attachedNodes.contains(playerNode) {
-            engine.detach(playerNode)
-        }
 
         let nowPlayingCenter = MPNowPlayingInfoCenter.default()
         nowPlayingCenter.nowPlayingInfo = nil
         nowPlayingCenter.playbackState = .stopped
+        playbackStartedAt = nil
         isStarted = false
+    }
+
+    func reassertNowPlayingState() {
+        guard isStarted else {
+            return
+        }
+
+        publishNowPlayingState()
     }
 
     private func startSilentLoop() throws {
@@ -264,15 +281,32 @@ private final class SystemNowPlayingProxyRuntime: NowPlayingProxyRuntimeControll
     }
 
     private func publishNowPlayingState() {
+        let elapsedPlaybackTime = playbackStartedAt.map { startedAt in
+            max(0, Date().timeIntervalSince(startedAt))
+        } ?? 0
         let nowPlayingCenter = MPNowPlayingInfoCenter.default()
         nowPlayingCenter.nowPlayingInfo = [
             MPMediaItemPropertyTitle: "Momentum4 Proxy",
             MPMediaItemPropertyArtist: "Momentum4PlayPauseBlock",
             MPNowPlayingInfoPropertyPlaybackRate: 1.0,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: elapsedPlaybackTime,
             MPMediaItemPropertyPlaybackDuration: 60 * 60 * 24,
         ]
         nowPlayingCenter.playbackState = .playing
+    }
+
+    private func startOwnershipKeepalive() {
+        ownershipKeepaliveTimer?.invalidate()
+        let timer = Timer(
+            timeInterval: Self.ownershipKeepaliveInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.publishNowPlayingState()
+            }
+        }
+        ownershipKeepaliveTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func installRemoteCommandHandlers(commandHandler: @escaping (ProxyRemoteCommand) -> Void) {
@@ -320,10 +354,12 @@ private struct ObservedDeviceSession {
 public final class PlaybackProxyService: PlaybackProxyControlling {
     public var statusDidChange: ((PlaybackProxyStatus) -> Void)?
     public var sourceCaptureDidResolve: ((String) -> Void)?
+    public var sourceCaptureDidFail: ((String) -> Void)?
 
     private let hidEnvironment: HIDEnvironment
     private let appleMusicController: AppleMusicControlling
     private let proxyFactory: () -> NowPlayingProxyRuntimeControlling
+    private let ownershipRecoveryDelays: [TimeInterval]
 
     private var configuration = PlaybackProxyConfiguration(enabled: false)
     private var observedDeviceSessions: [io_service_t: ObservedDeviceSession] = [:]
@@ -333,6 +369,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private var proxyRuntime: NowPlayingProxyRuntimeControlling?
     private var pendingForwardSourcePress: PendingForwardSourcePress?
     private var lastPublishedStatus: PlaybackProxyStatus?
+    private var ownershipRecoveryTasks: [Task<Void, Never>] = []
 
     public convenience init() {
         self.init(
@@ -345,11 +382,13 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     init(
         hidEnvironment: HIDEnvironment,
         appleMusicController: AppleMusicControlling,
-        proxyFactory: @escaping () -> NowPlayingProxyRuntimeControlling
+        proxyFactory: @escaping () -> NowPlayingProxyRuntimeControlling,
+        ownershipRecoveryDelays: [TimeInterval] = [0.08, 0.25, 0.6]
     ) {
         self.hidEnvironment = hidEnvironment
         self.appleMusicController = appleMusicController
         self.proxyFactory = proxyFactory
+        self.ownershipRecoveryDelays = ownershipRecoveryDelays
 
         hidEnvironment.devicesDidChange = { [weak self] in
             Task { @MainActor in
@@ -405,35 +444,22 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         publishStatus(.requestingPermissions)
 
         let inputMonitoringGranted = ensureListenPermission()
-        let automationPermissionResult: AppleMusicPermissionResult
-        if configuration.enabled {
-            automationPermissionResult = ensureMusicAutomationPermission()
-        } else {
-            automationPermissionResult = .granted
-        }
 
         if !inputMonitoringGranted {
             stopProxyIfNeeded()
             releaseAllObservedDevices()
             closeManagerIfNeeded()
 
-            if case .denied = automationPermissionResult {
-                publishStatus(
-                    .error(
-                        "Input Monitoring and Apple Music control are both required. Grant both in System Settings from the Settings panel, then relaunch once if macOS still does not activate them immediately."
-                    )
-                )
-                return
-            }
-
-            if case .error(let message) = automationPermissionResult {
-                publishStatus(.error(message))
-                return
-            }
-
             sourceCaptureIsActive = false
             publishStatus(.inputMonitoringDenied)
             return
+        }
+
+        let automationPermissionResult: AppleMusicPermissionResult
+        if configuration.enabled {
+            automationPermissionResult = ensureMusicAutomationPermission()
+        } else {
+            automationPermissionResult = .granted
         }
 
         switch automationPermissionResult {
@@ -496,7 +522,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         case kIOHIDAccessTypeGranted:
             return true
         case kIOHIDAccessTypeDenied, kIOHIDAccessTypeUnknown:
-            return hidEnvironment.requestListenAccess()
+            _ = hidEnvironment.requestListenAccess()
+            return hidEnvironment.checkListenAccess() == kIOHIDAccessTypeGranted
         default:
             return false
         }
@@ -556,6 +583,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     }
 
     private func stopProxyIfNeeded() {
+        cancelOwnershipRecoveryTasks()
         proxyRuntime?.stop()
         proxyRuntime = nil
     }
@@ -675,13 +703,16 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         sourceCaptureIsActive = false
 
         guard let capturedProductName, !capturedProductName.isEmpty else {
+            sourceCaptureDidFail?(
+                "Could not read a product name from that source. Try a different key."
+            )
             refreshObservedDevices()
             if !configuration.enabled {
                 releaseAllObservedDevices()
                 closeManagerIfNeeded()
                 publishStatus(.disabled)
             } else {
-                publishStatus(.error("The captured HID source does not expose a product name."))
+                publishStatus(.active(activeSourceDescription))
             }
             return
         }
@@ -711,7 +742,56 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
+        refreshProxyOwnershipAfterForward()
         publishStatus(.active(activeSourceDescription))
+    }
+
+    private func refreshProxyOwnershipAfterForward() {
+        guard configuration.enabled else {
+            return
+        }
+
+        let hadRuntime = proxyRuntime != nil
+        if hadRuntime {
+            proxyRuntime?.stop()
+            proxyRuntime = nil
+        }
+
+        if !startProxyIfNeeded() {
+            publishStatus(.error("The Apple Music proxy could not be restarted after forwarding."))
+            return
+        }
+
+        scheduleOwnershipRecoveryBursts()
+    }
+
+    private func scheduleOwnershipRecoveryBursts() {
+        cancelOwnershipRecoveryTasks()
+        proxyRuntime?.reassertNowPlayingState()
+
+        for delay in ownershipRecoveryDelays {
+            let task = Task { @MainActor [weak self] in
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                } else {
+                    await Task.yield()
+                }
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                self?.proxyRuntime?.reassertNowPlayingState()
+            }
+            ownershipRecoveryTasks.append(task)
+        }
+    }
+
+    private func cancelOwnershipRecoveryTasks() {
+        for task in ownershipRecoveryTasks {
+            task.cancel()
+        }
+        ownershipRecoveryTasks.removeAll(keepingCapacity: false)
     }
 
     private func consumeRecentForwardSourcePress() -> PendingForwardSourcePress? {

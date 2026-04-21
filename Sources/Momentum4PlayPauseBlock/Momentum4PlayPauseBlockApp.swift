@@ -5,39 +5,38 @@ import SwiftUI
 struct Momentum4PlayPauseBlockApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settingsStore: AppSettingsStore
+    private let appActions: AppActionController
 
     init() {
         _settingsStore = StateObject(wrappedValue: AppRuntime.sharedStore)
+        appActions = AppRuntime.sharedActions
     }
 
     var body: some Scene {
         MenuBarExtra(
             isInserted: Binding(
                 get: { settingsStore.showMenuBarIcon },
-                set: { settingsStore.showMenuBarIcon = $0 }
+                set: { _ in }
             )
         ) {
-            MenuBarMenu(settingsStore: settingsStore)
+            MenuBarMenu(appActions: appActions)
         } label: {
             Image(systemName: MenuBarIcon.symbolName(blockingEnabled: settingsStore.blockingEnabled))
                 .symbolRenderingMode(.monochrome)
                 .accessibilityLabel("Momentum4 PlayPause Block")
         }
         .menuBarExtraStyle(.menu)
-
-        Settings {
-            SettingsView(settingsStore: settingsStore)
-        }
     }
 }
 
 private struct MenuBarMenu: View {
-    @ObservedObject var settingsStore: AppSettingsStore
-    @Environment(\.openSettings) private var openSettings
+    let appActions: any AppActionHandling
 
     var body: some View {
         Button("Preferences…") {
-            openSettings()
+            DispatchQueue.main.async {
+                appActions.openSettings()
+            }
         }
 
         Button("Quit") {

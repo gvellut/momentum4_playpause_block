@@ -3,23 +3,8 @@ import Momentum4PlayPauseBlockCommon
 
 @MainActor
 public final class AppSettingsStore: ObservableObject {
-    @Published public var blockingEnabled: Bool {
-        didSet {
-            guard !suppressSideEffects, oldValue != blockingEnabled else {
-                return
-            }
-
-            guard !blockingEnabled || canEnableBlocking else {
-                setBlockingEnabledWithoutSideEffects(false)
-                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
-                applyProxyConfiguration()
-                return
-            }
-
-            defaults.set(blockingEnabled, forKey: AppSettingsKeys.blockingEnabled)
-            applyProxyConfiguration()
-        }
-    }
+    @Published public private(set) var blockingEnabled: Bool
+    @Published public private(set) var blockingRequested: Bool
 
     @Published public var showMenuBarIcon: Bool {
         didSet {
@@ -28,6 +13,10 @@ public final class AppSettingsStore: ObservableObject {
             }
 
             defaults.set(showMenuBarIcon, forKey: AppSettingsKeys.showMenuBarIcon)
+            defaults.set(
+                true,
+                forKey: AppSettingsKeys.hasExplicitlyConfiguredMenuBarIconVisibility
+            )
         }
     }
 
@@ -52,9 +41,8 @@ public final class AppSettingsStore: ObservableObject {
                 forKey: AppSettingsKeys.allowedForwardSourceMode
             )
 
-            if blockingEnabled && !canEnableBlocking {
-                setBlockingEnabledWithoutSideEffects(false)
-                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            if blockingRequested && !canEnableBlocking {
+                setBlockingRequestEnabled(false)
             }
 
             applyProxyConfiguration()
@@ -72,9 +60,8 @@ public final class AppSettingsStore: ObservableObject {
                 forKey: AppSettingsKeys.allowedForwardSourceProductName
             )
 
-            if blockingEnabled && !canEnableBlocking {
-                setBlockingEnabledWithoutSideEffects(false)
-                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            if blockingRequested && !canEnableBlocking {
+                setBlockingRequestEnabled(false)
             }
 
             applyProxyConfiguration()
@@ -84,6 +71,9 @@ public final class AppSettingsStore: ObservableObject {
     @Published public private(set) var proxyStatus: PlaybackProxyStatus = .disabled
     @Published public private(set) var launchAtLoginStatus: LaunchAtLoginStatus
     @Published public private(set) var isCapturingForwardSource = false
+    @Published public private(set) var pendingEnableAfterRelaunch = false
+    @Published public private(set) var captureFeedbackMessage: String?
+    @Published public private(set) var lastActivationFailure: String?
 
     public var canEnableBlocking: Bool {
         switch allowedForwardSourceMode {
@@ -91,6 +81,77 @@ public final class AppSettingsStore: ObservableObject {
             return !allowedForwardSourceProductName.isEmpty
         case .anyKeyboard, .anyHID:
             return true
+        }
+    }
+
+    public var shouldOfferRelaunchToFinishEnable: Bool {
+        pendingEnableAfterRelaunch && blockingRequested && !blockingEnabled
+    }
+
+    public var shouldShowPermissionActions: Bool {
+        switch proxyStatus {
+        case .inputMonitoringDenied, .musicAutomationDenied:
+            return true
+        case .disabled, .requestingPermissions, .active, .error:
+            return shouldOfferRelaunchToFinishEnable
+        }
+    }
+
+    public var blockingStatusSummary: String {
+        switch proxyStatus {
+        case .active:
+            return "Blocking is active."
+        case .requestingPermissions:
+            return "Waiting for macOS permissions."
+        case .inputMonitoringDenied:
+            return "Input Monitoring permission is required."
+        case .musicAutomationDenied:
+            return "Apple Music automation permission is required."
+        case .error:
+            return "Blocking could not be started."
+        case .disabled:
+            if shouldOfferRelaunchToFinishEnable {
+                return "Relaunch required to finish enabling."
+            }
+
+            if blockingRequested {
+                return "Starting blocking…"
+            }
+
+            return "Blocking is off."
+        }
+    }
+
+    public var shouldShowActivationNote: Bool {
+        activationNote != nil
+    }
+
+    public var activationNote: String? {
+        if let lastActivationFailure {
+            return lastActivationFailure
+        }
+
+        if !canEnableBlocking {
+            return "Choose a forward source before enabling blocking."
+        }
+
+        switch proxyStatus {
+        case .requestingPermissions:
+            return "macOS is requesting Input Monitoring and Apple Music control permission."
+        case .inputMonitoringDenied:
+            return "Grant Input Monitoring, then relaunch once to activate the block."
+        case .musicAutomationDenied:
+            return "Allow Apple Music control, then relaunch once to activate the block."
+        case .disabled:
+            if shouldOfferRelaunchToFinishEnable {
+                return "Finish granting permission, then relaunch once to activate the block."
+            }
+
+            return nil
+        case .active:
+            return proxyStatus.message
+        case .error(let message):
+            return message
         }
     }
 
@@ -116,13 +177,27 @@ public final class AppSettingsStore: ObservableObject {
         )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedBlockingEnabled = defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool
             ?? false
+        let storedPendingEnableAfterRelaunch = defaults.object(
+            forKey: AppSettingsKeys.pendingEnableAfterRelaunch
+        ) as? Bool ?? false
+        let hasExplicitlyConfiguredMenuBarIconVisibility = defaults.object(
+            forKey: AppSettingsKeys.hasExplicitlyConfiguredMenuBarIconVisibility
+        ) as? Bool ?? false
+        let resolvedBlockingEnabled =
+            storedBlockingEnabled
+            && (storedMode != .specificProductName || !storedProductName.isEmpty)
+        let resolvedBlockingRequested =
+            resolvedBlockingEnabled || storedPendingEnableAfterRelaunch
 
         self.allowedForwardSourceMode = storedMode
         self.allowedForwardSourceProductName = storedProductName
-        self.blockingEnabled =
-            storedBlockingEnabled
-            && (storedMode != .specificProductName || !storedProductName.isEmpty)
-        self.showMenuBarIcon = defaults.object(forKey: AppSettingsKeys.showMenuBarIcon) as? Bool ?? true
+        self.blockingEnabled = resolvedBlockingEnabled
+        self.pendingEnableAfterRelaunch = storedPendingEnableAfterRelaunch
+        self.blockingRequested = resolvedBlockingRequested
+        self.showMenuBarIcon =
+            hasExplicitlyConfiguredMenuBarIconVisibility
+            ? (defaults.object(forKey: AppSettingsKeys.showMenuBarIcon) as? Bool ?? true)
+            : true
         self.openAtLogin = defaults.object(forKey: AppSettingsKeys.openAtLogin) as? Bool ?? false
         self.launchAtLoginStatus = self.launchAtLoginController.currentStatus()
 
@@ -130,9 +205,13 @@ public final class AppSettingsStore: ObservableObject {
             defaults.set(self.blockingEnabled, forKey: AppSettingsKeys.blockingEnabled)
         }
 
+        if !hasExplicitlyConfiguredMenuBarIconVisibility {
+            defaults.set(true, forKey: AppSettingsKeys.showMenuBarIcon)
+        }
+
         self.proxyController.statusDidChange = { [weak self] status in
             Task { @MainActor in
-                self?.proxyStatus = status
+                self?.handleProxyStatusChange(status)
             }
         }
         self.proxyController.sourceCaptureDidResolve = { [weak self] productName in
@@ -140,11 +219,42 @@ public final class AppSettingsStore: ObservableObject {
                 self?.applyCapturedForwardSourceProductName(productName)
             }
         }
+        self.proxyController.sourceCaptureDidFail = { [weak self] message in
+            Task { @MainActor in
+                self?.handleSourceCaptureFailure(message)
+            }
+        }
     }
 
     public func refreshRuntimeState() {
         launchAtLoginStatus = launchAtLoginController.currentStatus()
         applyProxyConfiguration()
+    }
+
+    public func setBlockingRequested(_ enabled: Bool) {
+        guard enabled else {
+            setBlockingRequestEnabled(false)
+            proxyStatus = .disabled
+            applyProxyConfiguration()
+            return
+        }
+
+        guard canEnableBlocking else {
+            setBlockingRequestEnabled(false)
+            proxyStatus = .disabled
+            applyProxyConfiguration()
+            return
+        }
+
+        setBlockingRequestEnabled(true)
+        pendingEnableAfterRelaunch = false
+        defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+        lastActivationFailure = nil
+        applyProxyConfiguration()
+    }
+
+    public func setBlockingEnabled(_ enabled: Bool) {
+        setBlockingRequested(enabled)
     }
 
     public func handleFirstLaunchIfNeeded(showSettings: () -> Void) {
@@ -193,16 +303,44 @@ public final class AppSettingsStore: ObservableObject {
 
     public func toggleForwardSourceCapture() {
         if isCapturingForwardSource {
-            proxyController.cancelSourceCapture()
-            isCapturingForwardSource = false
+            cancelForwardSourceCapture()
             return
         }
 
+        captureFeedbackMessage = nil
         isCapturingForwardSource = proxyController.beginSourceCapture()
+        if isCapturingForwardSource {
+            captureFeedbackMessage = "Waiting for a key press from the device to allow…"
+        }
+    }
+
+    public func cancelForwardSourceCapture() {
+        guard isCapturingForwardSource else {
+            return
+        }
+
+        proxyController.cancelSourceCapture()
+        isCapturingForwardSource = false
+        captureFeedbackMessage = nil
     }
 
     public func openLoginItemsSystemSettings() {
         launchAtLoginController.openSystemSettings()
+    }
+
+    public func restartBlockingIfRequestedForRuntimeModeChange() {
+        guard blockingRequested else {
+            return
+        }
+
+        proxyController.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: false,
+                allowedForwardSourceMode: allowedForwardSourceMode,
+                allowedForwardSourceProductName: allowedForwardSourceProductName
+            )
+        )
+        applyProxyConfiguration()
     }
 
     private func applyCapturedForwardSourceProductName(_ productName: String) {
@@ -221,13 +359,61 @@ public final class AppSettingsStore: ObservableObject {
         )
 
         isCapturingForwardSource = false
+        captureFeedbackMessage = nil
         applyProxyConfiguration()
+    }
+
+    private func handleSourceCaptureFailure(_ message: String) {
+        isCapturingForwardSource = false
+        captureFeedbackMessage = message
+    }
+
+    private func handleProxyStatusChange(_ status: PlaybackProxyStatus) {
+        proxyStatus = status
+
+        switch status {
+        case .active:
+            setBlockingRequestedWithoutSideEffects(true)
+            setBlockingEnabledWithoutSideEffects(true)
+            defaults.set(true, forKey: AppSettingsKeys.blockingEnabled)
+            pendingEnableAfterRelaunch = false
+            defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            lastActivationFailure = nil
+        case .disabled:
+            setBlockingEnabledWithoutSideEffects(false)
+            if !blockingRequested {
+                defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+                pendingEnableAfterRelaunch = false
+                defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+                lastActivationFailure = nil
+            }
+        case .requestingPermissions:
+            setBlockingEnabledWithoutSideEffects(false)
+            defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            pendingEnableAfterRelaunch = false
+            defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            lastActivationFailure = nil
+        case .inputMonitoringDenied, .musicAutomationDenied:
+            setBlockingEnabledWithoutSideEffects(false)
+            defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            if blockingRequested {
+                pendingEnableAfterRelaunch = true
+                defaults.set(true, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            }
+            lastActivationFailure = nil
+        case .error:
+            setBlockingEnabledWithoutSideEffects(false)
+            defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            pendingEnableAfterRelaunch = false
+            defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            lastActivationFailure = status.message
+        }
     }
 
     private func applyProxyConfiguration() {
         proxyController.apply(
             configuration: PlaybackProxyConfiguration(
-                enabled: blockingEnabled && canEnableBlocking,
+                enabled: blockingRequested && canEnableBlocking,
                 allowedForwardSourceMode: allowedForwardSourceMode,
                 allowedForwardSourceProductName: allowedForwardSourceProductName
             )
@@ -258,6 +444,23 @@ public final class AppSettingsStore: ObservableObject {
         suppressSideEffects = true
         blockingEnabled = value
         suppressSideEffects = false
+    }
+
+    private func setBlockingRequestedWithoutSideEffects(_ value: Bool) {
+        suppressSideEffects = true
+        blockingRequested = value
+        suppressSideEffects = false
+    }
+
+    private func setBlockingRequestEnabled(_ value: Bool) {
+        setBlockingRequestedWithoutSideEffects(value)
+        if !value {
+            setBlockingEnabledWithoutSideEffects(false)
+            pendingEnableAfterRelaunch = false
+            defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            defaults.set(false, forKey: AppSettingsKeys.blockingEnabled)
+            lastActivationFailure = nil
+        }
     }
 
     private func setOpenAtLoginWithoutSideEffects(_ value: Bool) {
