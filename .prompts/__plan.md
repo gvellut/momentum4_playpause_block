@@ -1,4 +1,3 @@
-- [Change GUI](A_tasks/F_Change_GUI.md)
 ! [Initialization](A_tasks/A_Initialization.md)
     !? [cli](A_tasks/A.A_cli.md)
     !? [Id not found](A_tasks/A.B_Id_not_found.md)
@@ -6,3 +5,4 @@
 ! [Dummy app silent sound](A_tasks/C_Dummy_app_silent_sound.md)
 ! [Convert to app](A_tasks/D_Convert_to_app.md)
 ! [Arrange UX](A_tasks/E_Arrange_UX.md)
+! [Change GUI](A_tasks/F_Change_GUI.md)

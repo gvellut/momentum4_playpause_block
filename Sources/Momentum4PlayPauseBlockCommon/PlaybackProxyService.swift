@@ -608,7 +608,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
     private func shouldObserveDevice(_ snapshot: HIDDeviceSnapshot) -> Bool {
         if sourceCaptureIsActive {
-            return true
+            return snapshot.isKeyboardInterface
         }
 
         guard configuration.enabled else {
@@ -695,7 +695,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     }
 
     private func handleSourceCaptureEvent(_ event: HIDInputEvent) {
-        guard sourceCaptureIsActive, event.value != 0 else {
+        guard sourceCaptureIsActive, isSourceCaptureTriggerEvent(event) else {
             return
         }
 
@@ -820,6 +820,14 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         default:
             return false
         }
+    }
+
+    private func isSourceCaptureTriggerEvent(_ event: HIDInputEvent) -> Bool {
+        guard event.value != 0, event.device.isKeyboardInterface else {
+            return false
+        }
+
+        return event.usagePage == Int(kHIDPage_KeyboardOrKeypad)
     }
 
     private func publishStatus(_ status: PlaybackProxyStatus) {

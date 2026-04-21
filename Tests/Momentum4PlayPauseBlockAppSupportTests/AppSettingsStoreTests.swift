@@ -52,6 +52,24 @@ struct AppSettingsStoreTests {
     }
 
     @Test
+    func missingForwardSourceShowsInlineBlockingStatusWithoutExtraActivationNote() {
+        let defaults = makeDefaults()
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: MockProxyController(),
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.allowedForwardSourceMode = .specificProductName
+
+        #expect(
+            store.blockingStatusSummary
+                == "Blocking is off. Choose a forward source before enabling blocking."
+        )
+        #expect(store.activationNote == nil)
+    }
+
+    @Test
     func enablingWhilePermissionsArePendingKeepsRequestedStateOn() async {
         let defaults = makeDefaults()
         let proxyController = MockProxyController()

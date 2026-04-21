@@ -118,6 +118,10 @@ public final class AppSettingsStore: ObservableObject {
                 return "Starting blocking…"
             }
 
+            if !canEnableBlocking {
+                return "Blocking is off. Choose a forward source before enabling blocking."
+            }
+
             return "Blocking is off."
         }
     }
@@ -129,10 +133,6 @@ public final class AppSettingsStore: ObservableObject {
     public var activationNote: String? {
         if let lastActivationFailure {
             return lastActivationFailure
-        }
-
-        if !canEnableBlocking {
-            return "Choose a forward source before enabling blocking."
         }
 
         switch proxyStatus {

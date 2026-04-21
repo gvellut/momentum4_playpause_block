@@ -4,9 +4,14 @@ import Momentum4PlayPauseBlockCommon
 import SwiftUI
 
 struct SettingsView: View {
+    private enum FocusedField: Hashable {
+        case allowedForwardSourceProductName
+    }
+
     @ObservedObject var settingsStore: AppSettingsStore
     let appActions: any AppActionHandling
     @State private var allowedForwardSourceProductNameDraft: String
+    @FocusState private var focusedField: FocusedField?
 
     init(
         settingsStore: AppSettingsStore,
@@ -54,13 +59,20 @@ struct SettingsView: View {
 
             SettingsSectionCard(title: "Forward Source") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Picker("Source to allow forward", selection: allowedForwardSourceModeBinding) {
-                        ForEach(AllowedForwardSourceMode.allCases, id: \.self) { mode in
-                            Text(mode.displayName).tag(mode)
+                    HStack(alignment: .center, spacing: 12) {
+                        Text("Source to allow forward")
+                            .font(.subheadline.weight(.medium))
+
+                        Picker("Source to allow forward", selection: allowedForwardSourceModeBinding) {
+                            ForEach(AllowedForwardSourceMode.allCases, id: \.self) { mode in
+                                Text(mode.displayName).tag(mode)
+                            }
                         }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                        .frame(width: allowedForwardSourcePickerWidth, alignment: .leading)
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 220)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                     if settingsStore.allowedForwardSourceMode.requiresProductName {
                         VStack(alignment: .leading, spacing: 10) {
@@ -72,7 +84,9 @@ struct SettingsView: View {
                                 text: $allowedForwardSourceProductNameDraft
                             )
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 280)
+                            .focused($focusedField, equals: .allowedForwardSourceProductName)
+                            .disabled(settingsStore.isCapturingForwardSource)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .onChange(of: allowedForwardSourceProductNameDraft) { _, newValue in
                                 let sanitized =
                                     settingsStore.sanitizedAllowedForwardSourceProductName(
@@ -93,6 +107,7 @@ struct SettingsView: View {
                                     settingsStore.isCapturingForwardSource
                                         ? "Cancel Capture" : "Capture From Key Press"
                                 ) {
+                                    dismissFieldFocus()
                                     settingsStore.toggleForwardSourceCapture()
                                 }
 
@@ -154,11 +169,16 @@ struct SettingsView: View {
             }
         }
         .padding(18)
-        .frame(width: 520, alignment: .topLeading)
+        .frame(width: 640, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: settingsStore.allowedForwardSourceProductName) { _, newValue in
             if allowedForwardSourceProductNameDraft != newValue {
                 allowedForwardSourceProductNameDraft = newValue
+            }
+        }
+        .onChange(of: settingsStore.isCapturingForwardSource) { _, isCapturing in
+            if isCapturing {
+                dismissFieldFocus()
             }
         }
     }
@@ -226,6 +246,24 @@ struct SettingsView: View {
         case .requestingPermissions:
             return .secondary
         }
+    }
+
+    private var allowedForwardSourcePickerWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let widestOptionWidth =
+            AllowedForwardSourceMode.allCases
+            .map { mode in
+                (mode.displayName as NSString).size(withAttributes: [.font: font]).width
+            }
+            .max() ?? 0
+
+        // Leave room for the popup bezel and disclosure arrow while keeping the control contained.
+        return min(max(160, ceil(widestOptionWidth + 46)), 280)
+    }
+
+    private func dismissFieldFocus() {
+        focusedField = nil
+        NSApp.keyWindow?.makeFirstResponder(nil)
     }
 
     private var systemSettingsButtonTitle: String {

@@ -231,6 +231,86 @@ struct PlaybackProxyServiceTests {
         #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
     }
 
+    @Test
+    func sourceCaptureObservesOnlyKeyboardInterfaces() {
+        let environment = FakeHIDEnvironment()
+        let mouse = FakeHIDDevice(serviceID: 7, snapshot: .mouse(product: "USB Receiver"))
+        let keyboard = FakeHIDDevice(serviceID: 8, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        environment.devices = [mouse, keyboard]
+        let service = makeService(
+            environment: environment,
+            appleMusic: FakeAppleMusicController(),
+            runtime: FakeNowPlayingProxyRuntime()
+        )
+
+        #expect(service.beginSourceCapture())
+        #expect(!mouse.isObservingInput)
+        #expect(keyboard.isObservingInput)
+    }
+
+    @Test
+    func sourceCaptureIgnoresNoisyNonKeyboardInputUntilAKeyboardKeyIsPressed() async {
+        let environment = FakeHIDEnvironment()
+        let mouse = FakeHIDDevice(serviceID: 9, snapshot: .mouse(product: "USB Receiver"))
+        let keyboard = FakeHIDDevice(serviceID: 10, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        environment.devices = [mouse, keyboard]
+        let service = makeService(
+            environment: environment,
+            appleMusic: FakeAppleMusicController(),
+            runtime: FakeNowPlayingProxyRuntime()
+        )
+        var capturedProductNames: [String] = []
+        service.sourceCaptureDidResolve = { capturedProductNames.append($0) }
+
+        #expect(service.beginSourceCapture())
+
+        mouse.emitInput(
+            usagePage: Int(kHIDPage_Consumer),
+            usage: Int(kHIDUsage_Csmr_PlayOrPause),
+            value: 1,
+            timestamp: 9
+        )
+        await Task.yield()
+        #expect(capturedProductNames.isEmpty)
+
+        keyboard.emitInput(
+            usagePage: Int(kHIDPage_KeyboardOrKeypad),
+            usage: 0x04,
+            value: 1,
+            timestamp: 10
+        )
+        await Task.yield()
+        #expect(capturedProductNames == ["Keychron K1 Pro"])
+    }
+
+    @Test
+    func disablingStopsObservingPreviouslyTrackedDevices() {
+        let environment = FakeHIDEnvironment()
+        let device = FakeHIDDevice(serviceID: 11, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        environment.devices = [device]
+        let service = makeService(
+            environment: environment,
+            appleMusic: FakeAppleMusicController(),
+            runtime: FakeNowPlayingProxyRuntime()
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyKeyboard
+            )
+        )
+        #expect(device.isObservingInput)
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: false,
+                allowedForwardSourceMode: .anyKeyboard
+            )
+        )
+        #expect(!device.isObservingInput)
+    }
+
     private func makeService(
         environment: FakeHIDEnvironment,
         appleMusic: FakeAppleMusicController,
@@ -321,6 +401,7 @@ private final class FakeHIDDevice: HIDDeviceControlling {
     let snapshot: HIDDeviceSnapshot
 
     private var inputValueHandler: ((HIDInputEvent) -> Void)?
+    private(set) var isObservingInput = false
 
     init(serviceID: io_service_t, snapshot: HIDDeviceSnapshot) {
         self.serviceID = serviceID
@@ -339,6 +420,7 @@ private final class FakeHIDDevice: HIDDeviceControlling {
 
     func setInputValueHandler(_ handler: ((HIDInputEvent) -> Void)?) {
         inputValueHandler = handler
+        isObservingInput = handler != nil
     }
 
     func emitInput(usagePage: Int, usage: Int, value: Int, timestamp: UInt64) {

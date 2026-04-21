@@ -64,8 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Momentum4 PlayPause Block Preferences"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 560, height: 520))
-        window.minSize = NSSize(width: 560, height: 520)
+        window.setContentSize(NSSize(width: 680, height: 520))
+        window.minSize = NSSize(width: 680, height: 520)
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.hidesOnDeactivate = false
