@@ -97,33 +97,12 @@ public final class AppSettingsStore: ObservableObject {
         }
     }
 
-    public var blockingStatusSummary: String {
-        switch proxyStatus {
-        case .active:
-            return "Blocking is active."
-        case .requestingPermissions:
-            return "Waiting for macOS permissions."
-        case .inputMonitoringDenied:
-            return "Input Monitoring permission is required."
-        case .musicAutomationDenied:
-            return "Apple Music automation permission is required."
-        case .error:
-            return "Blocking could not be started."
-        case .disabled:
-            if shouldOfferRelaunchToFinishEnable {
-                return "Relaunch required to finish enabling."
-            }
-
-            if blockingRequested {
-                return "Starting blocking…"
-            }
-
-            if !canEnableBlocking {
-                return "Blocking is off. Choose a forward source before enabling blocking."
-            }
-
-            return "Blocking is off."
+    public var blockingStatusSummary: String? {
+        if !canEnableBlocking {
+            return "Choose a forward source before enabling blocking."
         }
+
+        return nil
     }
 
     public var shouldShowActivationNote: Bool {
@@ -131,28 +110,7 @@ public final class AppSettingsStore: ObservableObject {
     }
 
     public var activationNote: String? {
-        if let lastActivationFailure {
-            return lastActivationFailure
-        }
-
-        switch proxyStatus {
-        case .requestingPermissions:
-            return "macOS is requesting Input Monitoring and Apple Music control permission."
-        case .inputMonitoringDenied:
-            return "Grant Input Monitoring, then relaunch once to activate the block."
-        case .musicAutomationDenied:
-            return "Allow Apple Music control, then relaunch once to activate the block."
-        case .disabled:
-            if shouldOfferRelaunchToFinishEnable {
-                return "Finish granting permission, then relaunch once to activate the block."
-            }
-
-            return nil
-        case .active:
-            return proxyStatus.message
-        case .error(let message):
-            return message
-        }
+        nil
     }
 
     private let defaults: UserDefaults

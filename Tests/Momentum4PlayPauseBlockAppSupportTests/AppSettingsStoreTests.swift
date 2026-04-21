@@ -64,7 +64,7 @@ struct AppSettingsStoreTests {
 
         #expect(
             store.blockingStatusSummary
-                == "Blocking is off. Choose a forward source before enabling blocking."
+                == "Choose a forward source before enabling blocking."
         )
         #expect(store.activationNote == nil)
     }
@@ -130,6 +130,7 @@ struct AppSettingsStoreTests {
 
         #expect(store.blockingEnabled)
         #expect(store.blockingRequested)
+        #expect(store.blockingStatusSummary == nil)
         #expect(!store.shouldOfferRelaunchToFinishEnable)
     }
 
@@ -247,7 +248,7 @@ struct AppSettingsStoreTests {
         #expect(!store.blockingEnabled)
         #expect(store.blockingRequested)
         #expect(store.shouldOfferRelaunchToFinishEnable)
-        #expect(store.blockingStatusSummary == "Relaunch required to finish enabling.")
+        #expect(store.blockingStatusSummary == nil)
     }
 
     @Test

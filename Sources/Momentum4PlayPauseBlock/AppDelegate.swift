@@ -3,6 +3,8 @@ import Momentum4PlayPauseBlockAppSupport
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let settingsWindowContentSize = NSSize(width: 460, height: 520)
+
     private var launchContext = AppLaunchContext(launchedAsLoginItem: false)
     private var settingsWindowController: NSWindowController?
 
@@ -48,9 +50,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
 
+        applySettingsWindowSizing(to: window)
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
         NSApplication.shared.activate(ignoringOtherApps: true)
+        clearInitialTextFieldFocus(in: window)
     }
 
     @MainActor
@@ -64,8 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Momentum4 PlayPause Block Preferences"
         window.styleMask = [.titled, .closable, .miniaturizable]
-        window.setContentSize(NSSize(width: 680, height: 520))
-        window.minSize = NSSize(width: 680, height: 520)
+        applySettingsWindowSizing(to: window)
+        window.initialFirstResponder = nil
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         window.hidesOnDeactivate = false
@@ -94,6 +98,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.async {
             AppRuntime.sharedActions.openSettings()
         }
+    }
+
+    @MainActor
+    private func clearInitialTextFieldFocus(in window: NSWindow) {
+        window.endEditing(for: nil)
+        _ = window.makeFirstResponder(nil)
+
+        DispatchQueue.main.async { [weak window] in
+            guard let window else {
+                return
+            }
+
+            window.endEditing(for: nil)
+            _ = window.makeFirstResponder(nil)
+        }
+    }
+
+    @MainActor
+    private func applySettingsWindowSizing(to window: NSWindow) {
+        window.setContentSize(Self.settingsWindowContentSize)
+        window.minSize = Self.settingsWindowContentSize
     }
 
     @MainActor

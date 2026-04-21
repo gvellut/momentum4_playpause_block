@@ -31,9 +31,11 @@ struct SettingsView: View {
                     .toggleStyle(.switch)
                     .disabled(!settingsStore.canEnableBlocking && !settingsStore.blockingRequested)
 
-                Text(settingsStore.blockingStatusSummary)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(blockingStatusColor)
+                if let blockingStatusSummary = settingsStore.blockingStatusSummary {
+                    Text(blockingStatusSummary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(blockingStatusColor)
+                }
 
                 if settingsStore.shouldShowPermissionActions {
                     HStack(spacing: 10) {
@@ -48,14 +50,9 @@ struct SettingsView: View {
                         }
                     }
                 }
-
-                if let activationNote = settingsStore.activationNote {
-                    Text(activationNote)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
+
+            Divider()
 
             SettingsSectionCard(title: "Forward Source") {
                 VStack(alignment: .leading, spacing: 12) {
@@ -125,16 +122,10 @@ struct SettingsView: View {
                         }
                     }
 
-                    Text(
-                        settingsStore.allowedForwardSourceValidationMessage(
-                            for: allowedForwardSourceProductNameDraft
-                        )
-                    )
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
+
+            Divider()
 
             SettingsSectionCard(title: "App") {
                 Toggle("Show icon in menubar", isOn: showMenuBarIconBinding)
@@ -169,7 +160,7 @@ struct SettingsView: View {
             }
         }
         .padding(18)
-        .frame(width: 640, alignment: .topLeading)
+        .frame(width: 460, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: settingsStore.allowedForwardSourceProductName) { _, newValue in
             if allowedForwardSourceProductNameDraft != newValue {
@@ -312,11 +303,6 @@ private struct SettingsSectionCard<Content: View>: View {
 
             content
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-        )
     }
 }
