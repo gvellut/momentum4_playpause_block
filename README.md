@@ -1,22 +1,20 @@
 # Momentum4 PlayPause Block
 
-Momentum4 PlayPause Block is a macOS 15+ menu bar app and companion CLI that block remote play/pause commands by owning the active media-command path, then forwarding only approved HID play/pause presses back to Apple Music.
+Momentum4 PlayPause Block is a macOS 15+ menu bar app that blocks remote play/pause commands by the Sennheiser Momentum 4 headset.
 
+It solves the issue I have where every smart feature (including on-head detection) is disabled with the Sennheiser app but the music still pauses or plays sometimes when I move the earcup to scratch my ear. Manual pause / play with keyboard key press or the Apple Music controls still works.
 
-## What The Supported Path Does
+## How it blocks the headset
 
-The supported path is:
-
-- a hidden AppKit-backed process with a silent now-playing proxy so macOS routes media commands to it
-- HID correlation so only approved HID play/pause presses are treated as real local input
+- a hidden AppKit-backed process with a silent now-playing proxy so macOS routes media commands to it. The controls from the headset are not routed through HID (which would make it easy to intercept and block), so a more complex process is used.
+- HID correlation so only approved HID play/pause presses are treated as real local input.
 - Apple Music forwarding through `osascript` for approved presses
 - swallowing of remote play/pause commands that do not correlate with an allowed HID source
 - the menu bar app stays in the menu bar unless you choose to hide it
 
 ## Limitations
 
-- Apple Music only.
-  Forwarding uses AppleScript to control `Music`, so Spotify and other players are not supported by the production path.
+- Apple Music only. Forwarding uses AppleScript to control `Music`, so Spotify and other players are not supported in the current version.
 - The supported path is source-based, not headset-ID-based. While blocking is enabled, non-approved remote play/pause sources are swallowed globally: The app targets the way the Sennheiser Momentum 4 connects to macOS for swallowing its events. It may work for other headsets with similar setup (AVRCP) but not a given.
 
 ## Settings
@@ -58,36 +56,20 @@ Build the signed release app bundle:
 ./scripts/build-app.sh
 ```
 
+The script uses `My Swift Dev Cert` as the default `SIGNING_IDENTITY`. Override it if your local certificate has a different name:
+
+```bash
+SIGNING_IDENTITY="Your Certificate Name" ./scripts/build-app.sh
+```
+
 The result is:
 
 ```text
 dist/Momentum4PlayPauseBlock.app
 ```
 
-## Main CLI
+## Simple CLI for testing
 
 `Momentum4PlayPauseBlockCLI` uses the same Apple Music-only proxy path as the menu bar app, but it stays in the foreground and does not use the app’s stored settings.
 
-Examples:
-
-```bash
-./scripts/sign-built-product.sh Momentum4PlayPauseBlockCLI debug
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --forward-source any-keyboard
-./scripts/run-signed-product.sh Momentum4PlayPauseBlockCLI debug -- --forward-source specific-product-name --product-name "Keychron K1 Pro"
-```
-
-CLI details are in [docs/cli.md](/Users/guilhem/Documents/projects/github/momentum4_playpause_block/docs/cli.md:1).
-
-## Developer Notes
-
-Useful commands:
-
-```bash
-./scripts/sign-built-product.sh Momentum4PlayPauseBlock debug
-./scripts/sign-built-product.sh Momentum4PlayPauseBlockCLI debug
-./scripts/swift-package.sh test
-./scripts/build-app.sh
-```
-
-The package still contains an internal diagnostic executable for experimentation, but it is intentionally not part of the documented or surfaced production workflow.
+CLI details are in [docs/cli.md](docs/cli.md).

@@ -11,23 +11,81 @@ APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 CONTENTS_DIR="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
+MODULE_CACHE_PATH="$ROOT_DIR/.build/module-cache"
+CLANG_CACHE_PATH="$ROOT_DIR/.build/clang-cache"
+SWIFTPM_CACHE_PATH="$ROOT_DIR/.build/swiftpm-cache"
+CLT_SDK_DIR="/Library/Developer/CommandLineTools/SDKs"
+PREFERRED_SDK_VERSION="${PREFERRED_SDK_VERSION:-26.2}"
 
-if ! security find-identity -v -p codesigning | grep -F "\"$SIGNING_IDENTITY\"" >/dev/null; then
-    cat >&2 <<EOF
-Configured signing identity "$SIGNING_IDENTITY" was not found.
+resolve_sdkroot() {
+    if [[ -n "${SDKROOT:-}" && -d "$SDKROOT" ]]; then
+        printf '%s\n' "$SDKROOT"
+        return
+    fi
 
-Create or import the certificate first, or rerun with:
-  SIGNING_IDENTITY="Your Certificate Name" ./scripts/build-app.sh
-EOF
+    if [[ -d "$CLT_SDK_DIR" ]]; then
+        local preferred_sdk="$CLT_SDK_DIR/MacOSX$PREFERRED_SDK_VERSION.sdk"
+        if [[ -d "$preferred_sdk" ]]; then
+            printf '%s\n' "$preferred_sdk"
+            return
+        fi
+
+        local preferred_major="${PREFERRED_SDK_VERSION%%.*}"
+        local preferred_major_candidate=""
+        local best_candidate=""
+
+        while IFS= read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            if [[ -z "$preferred_major_candidate" && "$(basename "$candidate")" == MacOSX"$preferred_major"*\.sdk ]]; then
+                preferred_major_candidate="$candidate"
+            fi
+            best_candidate="$candidate"
+        done < <(
+            find "$CLT_SDK_DIR" -maxdepth 1 -type d -name 'MacOSX*.sdk' -print \
+                | sort -V -r
+        )
+
+        if [[ -n "$preferred_major_candidate" ]]; then
+            printf '%s\n' "$preferred_major_candidate"
+            return
+        fi
+
+        if [[ -n "$best_candidate" ]]; then
+            printf '%s\n' "$best_candidate"
+            return
+        fi
+    fi
+
+    xcrun --sdk macosx --show-sdk-path
+}
+
+swift_build() {
+    env \
+        "SDKROOT=$SDKROOT_CANDIDATE" \
+        "CLANG_MODULE_CACHE_PATH=$CLANG_CACHE_PATH" \
+        swift \
+        build \
+        --cache-path "$SWIFTPM_CACHE_PATH" \
+        -Xswiftc -module-cache-path \
+        -Xswiftc "$MODULE_CACHE_PATH" \
+        -Xcc "-fmodules-cache-path=$CLANG_CACHE_PATH" \
+        "$@"
+}
+
+mkdir -p "$MODULE_CACHE_PATH" "$CLANG_CACHE_PATH" "$SWIFTPM_CACHE_PATH" "$DIST_DIR"
+
+SDKROOT_CANDIDATE="$(resolve_sdkroot)"
+
+swift_build -c release --product "$APP_NAME"
+
+BIN_DIR="$(swift_build -c release --show-bin-path)"
+EXECUTABLE_PATH="$BIN_DIR/$APP_NAME"
+
+if [[ ! -x "$EXECUTABLE_PATH" ]]; then
+    echo "Built product not found at $EXECUTABLE_PATH" >&2
     exit 1
 fi
 
-"$ROOT_DIR/scripts/swift-package.sh" build -c release --product "$APP_NAME"
-
-BIN_DIR="$("$ROOT_DIR/scripts/swift-package.sh" build -c release --show-bin-path)"
-EXECUTABLE_PATH="$BIN_DIR/$APP_NAME"
-
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
@@ -64,12 +122,29 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
 </plist>
 EOF
 
-codesign \
-    --force \
-    --options runtime \
-    --sign "$SIGNING_IDENTITY" \
-    --timestamp=none \
-    "$APP_BUNDLE"
+if ! codesign_output="$(
+    codesign \
+        --force \
+        --options runtime \
+        --sign "$SIGNING_IDENTITY" \
+        --timestamp=none \
+        "$APP_BUNDLE" \
+        2>&1
+)"; then
+    printf '%s\n' "$codesign_output" >&2
+    cat >&2 <<EOF
+
+Failed to sign "$APP_BUNDLE" with identity "$SIGNING_IDENTITY".
+
+If the certificate exists in Keychain Access but is still rejected, check that the
+matching private key is present and usable for code signing:
+  security find-identity -v -p codesigning
+
+If the certificate has a different common name, rerun with:
+  SIGNING_IDENTITY="Your Certificate Name" ./scripts/build-app.sh
+EOF
+    exit 1
+fi
 
 codesign --verify --deep --strict "$APP_BUNDLE"
 
