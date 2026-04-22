@@ -11,7 +11,7 @@
             ],
             "group": "build",
             "problemMatcher": [
-                "$swift"
+                "$swiftc"
             ]
         },
         {
@@ -23,7 +23,19 @@
                 "debug"
             ],
             "problemMatcher": [
-                "$swift"
+                "$swiftc"
+            ]
+        },
+        {
+            "label": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/sign-built-product.sh",
+            "args": [
+                "Momentum4PlayPauseBlockDiagCLI",
+                "debug"
+            ],
+            "problemMatcher": [
+                "$swiftc"
             ]
         }
     ]
