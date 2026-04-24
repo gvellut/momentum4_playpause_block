@@ -1,0 +1,2 @@
+Disable silent sound playing on sleep. Is that possible ? Or will playing the sound actually disable sleep
+When waking up, reenable the sound (so the program can be the recipient of media event like when it is first launched)

@@ -255,7 +255,7 @@ struct PlaybackProxyServiceTests {
                 pollInterval: 15
             )
         )
-        ownershipMonitor.triggerOwnershipRisk()
+        ownershipMonitor.trigger(.timedBackstopTick(15))
         try? await Task.sleep(for: .milliseconds(20))
 
         #expect(ownershipMonitor.startConfigurations == [
@@ -292,7 +292,7 @@ struct PlaybackProxyServiceTests {
                 eventDrivenReclaimEnabled: true
             )
         )
-        ownershipMonitor.triggerOwnershipRisk()
+        ownershipMonitor.trigger(.mediaRemoteNotification("com.apple.MediaRemote.test"))
         try? await Task.sleep(for: .milliseconds(20))
 
         #expect(ownershipMonitor.startConfigurations == [
@@ -330,8 +330,8 @@ struct PlaybackProxyServiceTests {
                 eventDrivenReclaimEnabled: true
             )
         )
-        ownershipMonitor.triggerOwnershipRisk()
-        ownershipMonitor.triggerOwnershipRisk()
+        ownershipMonitor.trigger(.mediaRemoteNotification("com.apple.MediaRemote.test"))
+        ownershipMonitor.trigger(.mediaRemoteNotification("com.apple.MediaRemote.test"))
         try? await Task.sleep(for: .milliseconds(20))
 
         #expect(firstRuntime.stopCalls == 1)
@@ -436,13 +436,47 @@ struct PlaybackProxyServiceTests {
                 allowedForwardSourceMode: .anyHID
             )
         )
-        ownershipMonitor.triggerOwnershipRisk()
+        ownershipMonitor.trigger(.timedBackstopTick(15))
         try? await Task.sleep(for: .milliseconds(20))
 
         #expect(ownershipMonitor.startConfigurations.isEmpty)
         #expect(runtime.stopCalls == 0)
         #expect(runtime.startCalls == 1)
         #expect(runtime.reassertNowPlayingStateCalls == 0)
+    }
+
+    @Test
+    func sleepAndWakeSignalsEmitDiagnostics() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let runtime = FakeNowPlayingProxyRuntime()
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtime },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05
+        )
+        var diagnostics: [PlaybackProxyDiagnosticEvent] = []
+        service.diagnosticDidEmit = { diagnostics.append($0) }
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.systemWillSleep)
+        ownershipMonitor.trigger(.screensDidSleep)
+        ownershipMonitor.trigger(.systemDidWake)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(diagnostics.contains(.systemWillSleep))
+        #expect(diagnostics.contains(.screensDidSleep))
+        #expect(diagnostics.contains(.systemDidWake))
+        #expect(diagnostics.contains(.ownershipReclaimStarted(.systemDidWake)))
+        #expect(diagnostics.contains(.ownershipReclaimSucceeded(.systemDidWake)))
     }
 
     @Test
@@ -549,23 +583,23 @@ struct PlaybackProxyServiceTests {
 private final class FakePlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitoring {
     private(set) var startConfigurations: [PlaybackProxyOwnershipMonitoringConfiguration] = []
     private(set) var stopCalls = 0
-    private var ownershipRiskHandler: (() -> Void)?
+    private var signalHandler: ((PlaybackProxyOwnershipMonitorSignal) -> Void)?
 
     func start(
         configuration: PlaybackProxyOwnershipMonitoringConfiguration,
-        onOwnershipRiskDetected: @escaping () -> Void
+        onSignal: @escaping (PlaybackProxyOwnershipMonitorSignal) -> Void
     ) {
         startConfigurations.append(configuration)
-        ownershipRiskHandler = onOwnershipRiskDetected
+        signalHandler = onSignal
     }
 
     func stop() {
         stopCalls += 1
-        ownershipRiskHandler = nil
+        signalHandler = nil
     }
 
-    func triggerOwnershipRisk() {
-        ownershipRiskHandler?()
+    func trigger(_ signal: PlaybackProxyOwnershipMonitorSignal) {
+        signalHandler?(signal)
     }
 }
 

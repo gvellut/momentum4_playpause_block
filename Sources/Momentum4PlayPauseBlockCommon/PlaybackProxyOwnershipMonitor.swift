@@ -1,6 +1,15 @@
 import AppKit
 import Foundation
 
+enum PlaybackProxyOwnershipMonitorSignal: Equatable {
+    case systemWillSleep
+    case systemDidWake
+    case screensDidSleep
+    case screensDidWake
+    case mediaRemoteNotification(String)
+    case timedBackstopTick(TimeInterval)
+}
+
 struct PlaybackProxyOwnershipMonitoringConfiguration: Equatable {
     let eventDrivenReclaimEnabled: Bool
     let pollInterval: TimeInterval?
@@ -14,7 +23,7 @@ struct PlaybackProxyOwnershipMonitoringConfiguration: Equatable {
 protocol PlaybackProxyOwnershipMonitoring: AnyObject {
     func start(
         configuration: PlaybackProxyOwnershipMonitoringConfiguration,
-        onOwnershipRiskDetected: @escaping () -> Void
+        onSignal: @escaping (PlaybackProxyOwnershipMonitorSignal) -> Void
     )
     func stop()
 }
@@ -31,11 +40,11 @@ final class SystemPlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitorin
     private let distributedNotificationCenter: DistributedNotificationCenter
     private let mediaRemoteBridge: MediaRemoteNotificationRegistering
 
-    private var wakeObserver: Any?
+    private var workspaceObservers: [Any] = []
     private var distributedObservers: [Any] = []
     private var pollTimer: Timer?
     private var activeConfiguration: PlaybackProxyOwnershipMonitoringConfiguration?
-    private var ownershipRiskHandler: (() -> Void)?
+    private var signalHandler: ((PlaybackProxyOwnershipMonitorSignal) -> Void)?
 
     init(
         workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
@@ -49,19 +58,19 @@ final class SystemPlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitorin
 
     func start(
         configuration: PlaybackProxyOwnershipMonitoringConfiguration,
-        onOwnershipRiskDetected: @escaping () -> Void
+        onSignal: @escaping (PlaybackProxyOwnershipMonitorSignal) -> Void
     ) {
         if activeConfiguration == configuration {
-            ownershipRiskHandler = onOwnershipRiskDetected
+            signalHandler = onSignal
             return
         }
 
         stop()
-        ownershipRiskHandler = onOwnershipRiskDetected
+        signalHandler = onSignal
         activeConfiguration = configuration
 
         if configuration.eventDrivenReclaimEnabled {
-            installWakeObserver()
+            installWorkspaceObservers()
             installMediaRemoteObservers()
         }
 
@@ -71,10 +80,10 @@ final class SystemPlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitorin
     }
 
     func stop() {
-        if let wakeObserver {
-            workspaceNotificationCenter.removeObserver(wakeObserver)
-            self.wakeObserver = nil
+        for observer in workspaceObservers {
+            workspaceNotificationCenter.removeObserver(observer)
         }
+        workspaceObservers.removeAll(keepingCapacity: false)
 
         for observer in distributedObservers {
             distributedNotificationCenter.removeObserver(observer)
@@ -84,18 +93,26 @@ final class SystemPlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitorin
         pollTimer?.invalidate()
         pollTimer = nil
         activeConfiguration = nil
-        ownershipRiskHandler = nil
+        signalHandler = nil
     }
 
-    private func installWakeObserver() {
-        wakeObserver = workspaceNotificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.ownershipRiskHandler?()
+    private func installWorkspaceObservers() {
+        for (name, signal) in [
+            (NSWorkspace.willSleepNotification, PlaybackProxyOwnershipMonitorSignal.systemWillSleep),
+            (NSWorkspace.didWakeNotification, PlaybackProxyOwnershipMonitorSignal.systemDidWake),
+            (NSWorkspace.screensDidSleepNotification, PlaybackProxyOwnershipMonitorSignal.screensDidSleep),
+            (NSWorkspace.screensDidWakeNotification, PlaybackProxyOwnershipMonitorSignal.screensDidWake),
+        ] {
+            let observer = workspaceNotificationCenter.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.signalHandler?(signal)
+                }
             }
+            workspaceObservers.append(observer)
         }
     }
 
@@ -109,7 +126,7 @@ final class SystemPlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitorin
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.ownershipRiskHandler?()
+                    self?.signalHandler?(.mediaRemoteNotification(notificationName))
                 }
             }
             distributedObservers.append(observer)
@@ -119,7 +136,7 @@ final class SystemPlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitorin
     private func installPollTimer(interval: TimeInterval) {
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.ownershipRiskHandler?()
+                self?.signalHandler?(.timedBackstopTick(interval))
             }
         }
         pollTimer = timer

@@ -82,6 +82,33 @@ public enum PlaybackProxyStatus: Equatable, Sendable {
     }
 }
 
+public enum PlaybackProxyOwnershipReclaimReason: Equatable, Sendable {
+    case forwardedCommand
+    case systemDidWake
+    case mediaRemoteNotification(String)
+    case timedBackstopTick(TimeInterval)
+    case missingExpectedRemoteCommand(sourceLabel: String, correlationWindow: TimeInterval)
+}
+
+public enum PlaybackProxyDiagnosticEvent: Equatable, Sendable {
+    case systemWillSleep
+    case systemDidWake
+    case screensDidSleep
+    case screensDidWake
+    case mediaRemoteNotification(String)
+    case timedBackstopTick(TimeInterval)
+    case ownershipReclaimStarted(PlaybackProxyOwnershipReclaimReason)
+    case ownershipReclaimSkippedCooldown(
+        PlaybackProxyOwnershipReclaimReason,
+        cooldown: TimeInterval
+    )
+    case ownershipReclaimSucceeded(PlaybackProxyOwnershipReclaimReason)
+    case ownershipReclaimFailed(
+        PlaybackProxyOwnershipReclaimReason,
+        message: String
+    )
+}
+
 @MainActor
 public protocol PlaybackProxyControlling: AnyObject {
     var statusDidChange: ((PlaybackProxyStatus) -> Void)? { get set }
@@ -371,6 +398,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     public var statusDidChange: ((PlaybackProxyStatus) -> Void)?
     public var sourceCaptureDidResolve: ((String) -> Void)?
     public var sourceCaptureDidFail: ((String) -> Void)?
+    public var diagnosticDidEmit: ((PlaybackProxyDiagnosticEvent) -> Void)?
 
     private let hidEnvironment: HIDEnvironment
     private let appleMusicController: AppleMusicControlling
@@ -649,9 +677,9 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         }
 
         activeOwnershipMonitoringConfiguration = monitoringConfiguration
-        ownershipMonitor?.start(configuration: monitoringConfiguration) { [weak self] in
+        ownershipMonitor?.start(configuration: monitoringConfiguration) { [weak self] signal in
             Task { @MainActor in
-                self?.refreshProxyOwnershipIfNeeded()
+                self?.handleOwnershipMonitorSignal(signal)
             }
         }
     }
@@ -660,6 +688,31 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         ownershipMonitor?.stop()
         ownershipMonitor = nil
         activeOwnershipMonitoringConfiguration = nil
+    }
+
+    private func handleOwnershipMonitorSignal(_ signal: PlaybackProxyOwnershipMonitorSignal) {
+        switch signal {
+        case .systemWillSleep:
+            emitDiagnostic(.systemWillSleep)
+
+        case .systemDidWake:
+            emitDiagnostic(.systemDidWake)
+            _ = refreshProxyOwnershipIfNeeded(reason: .systemDidWake)
+
+        case .screensDidSleep:
+            emitDiagnostic(.screensDidSleep)
+
+        case .screensDidWake:
+            emitDiagnostic(.screensDidWake)
+
+        case .mediaRemoteNotification(let notificationName):
+            emitDiagnostic(.mediaRemoteNotification(notificationName))
+            _ = refreshProxyOwnershipIfNeeded(reason: .mediaRemoteNotification(notificationName))
+
+        case .timedBackstopTick(let interval):
+            emitDiagnostic(.timedBackstopTick(interval))
+            _ = refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
+        }
     }
 
     private func refreshObservedDevices() {
@@ -820,6 +873,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         }
 
         if reclaimProxyOwnership(
+            reason: .forwardedCommand,
             failureMessage: "The Apple Music proxy could not be restarted after forwarding.",
             respectsCooldown: false
         ) {
@@ -828,6 +882,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     }
 
     private func reclaimProxyOwnership(
+        reason: PlaybackProxyOwnershipReclaimReason,
         failureMessage: String,
         respectsCooldown: Bool
     ) -> Bool {
@@ -838,10 +893,17 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         if respectsCooldown, let lastOwnershipReclaimAt {
             let elapsed = Date().timeIntervalSince(lastOwnershipReclaimAt)
             if elapsed >= 0, elapsed < ownershipReclaimCooldown {
+                emitDiagnostic(
+                    .ownershipReclaimSkippedCooldown(
+                        reason,
+                        cooldown: ownershipReclaimCooldown
+                    )
+                )
                 return true
             }
         }
 
+        emitDiagnostic(.ownershipReclaimStarted(reason))
         lastOwnershipReclaimAt = Date()
         let hadRuntime = proxyRuntime != nil
         if hadRuntime {
@@ -852,15 +914,20 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         if !startProxyIfNeeded() {
             lastOwnershipReclaimAt = nil
             publishStatus(.error(failureMessage))
+            emitDiagnostic(.ownershipReclaimFailed(reason, message: failureMessage))
             return false
         }
 
         scheduleOwnershipRecoveryBursts()
+        emitDiagnostic(.ownershipReclaimSucceeded(reason))
         return true
     }
 
-    private func refreshProxyOwnershipIfNeeded() -> Bool {
+    private func refreshProxyOwnershipIfNeeded(
+        reason: PlaybackProxyOwnershipReclaimReason
+    ) -> Bool {
         reclaimProxyOwnership(
+            reason: reason,
             failureMessage: "The Apple Music proxy could not be restarted while reclaiming ownership.",
             respectsCooldown: true
         )
@@ -927,12 +994,19 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
-        guard pendingForwardSourcePress?.identifier == identifier else {
+        guard
+            let matchedPendingForwardSourcePress = self.pendingForwardSourcePress,
+            matchedPendingForwardSourcePress.identifier == identifier
+        else {
             return
         }
 
-        pendingForwardSourcePress = nil
-        if refreshProxyOwnershipIfNeeded() {
+        let reclaimReason = PlaybackProxyOwnershipReclaimReason.missingExpectedRemoteCommand(
+            sourceLabel: matchedPendingForwardSourcePress.deviceLabel,
+            correlationWindow: self.forwardSourceCorrelationWindow
+        )
+        self.pendingForwardSourcePress = nil
+        if refreshProxyOwnershipIfNeeded(reason: reclaimReason) {
             publishStatus(.active(activeSourceDescription))
         }
     }
@@ -982,5 +1056,9 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         lastPublishedStatus = status
         statusDidChange?(status)
+    }
+
+    private func emitDiagnostic(_ event: PlaybackProxyDiagnosticEvent) {
+        diagnosticDidEmit?(event)
     }
 }
