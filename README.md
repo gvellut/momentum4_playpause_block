@@ -70,6 +70,6 @@ dist/Momentum4PlayPauseBlock.app
 
 ## Simple CLI for testing
 
-`Momentum4PlayPauseBlockCLI` uses the same Apple Music-only proxy path as the menu bar app, but it stays in the foreground and does not use the app’s stored settings.
+`Momentum4PlayPauseBlockCLI` uses the same Apple Music-only proxy path as the menu bar app, but it stays in the foreground, keeps event-driven ownership reclaim enabled, and uses a `15s` timed reclaim backstop by default.
 
 CLI details are in [docs/cli.md](docs/cli.md).

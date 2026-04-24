@@ -129,6 +129,7 @@ final class CLIApplication {
     private var startupMessages: [String] {
         [
             "Running the Apple Music-only play/pause proxy. Forwarding is allowed from \(arguments.startupDescription). Press Control-C to stop.",
+            arguments.ownershipReclaimDescription,
             "Hidden AppKit bootstrap is active so this CLI can own media commands through MPRemoteCommandCenter.",
         ]
     }

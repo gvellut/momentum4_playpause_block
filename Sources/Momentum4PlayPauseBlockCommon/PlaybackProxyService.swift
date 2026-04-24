@@ -28,16 +28,31 @@ public struct PlaybackProxyConfiguration: Equatable, Sendable {
     public let enabled: Bool
     public let allowedForwardSourceMode: AllowedForwardSourceMode
     public let allowedForwardSourceProductName: String
+    public let eventDrivenReclaimEnabled: Bool
+    public let pollInterval: TimeInterval?
 
     public init(
         enabled: Bool,
         allowedForwardSourceMode: AllowedForwardSourceMode = .anyHID,
-        allowedForwardSourceProductName: String = ""
+        allowedForwardSourceProductName: String = "",
+        eventDrivenReclaimEnabled: Bool = false,
+        pollInterval: TimeInterval? = nil
     ) {
         self.enabled = enabled
         self.allowedForwardSourceMode = allowedForwardSourceMode
         self.allowedForwardSourceProductName = allowedForwardSourceProductName
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        self.eventDrivenReclaimEnabled = eventDrivenReclaimEnabled
+        self.pollInterval = pollInterval.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    var ownershipMonitoringConfiguration: PlaybackProxyOwnershipMonitoringConfiguration? {
+        let configuration = PlaybackProxyOwnershipMonitoringConfiguration(
+            eventDrivenReclaimEnabled: eventDrivenReclaimEnabled,
+            pollInterval: pollInterval
+        )
+
+        return configuration.isEnabled ? configuration : nil
     }
 }
 
@@ -80,6 +95,7 @@ public protocol PlaybackProxyControlling: AnyObject {
 }
 
 private struct PendingForwardSourcePress {
+    let identifier: UUID
     let observedAt: Date
     let deviceLabel: String
 }
@@ -359,7 +375,10 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private let hidEnvironment: HIDEnvironment
     private let appleMusicController: AppleMusicControlling
     private let proxyFactory: () -> NowPlayingProxyRuntimeControlling
+    private let ownershipMonitorFactory: () -> PlaybackProxyOwnershipMonitoring
     private let ownershipRecoveryDelays: [TimeInterval]
+    private let forwardSourceCorrelationWindow: TimeInterval
+    private let ownershipReclaimCooldown: TimeInterval
 
     private var configuration = PlaybackProxyConfiguration(enabled: false)
     private var observedDeviceSessions: [io_service_t: ObservedDeviceSession] = [:]
@@ -370,12 +389,18 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private var pendingForwardSourcePress: PendingForwardSourcePress?
     private var lastPublishedStatus: PlaybackProxyStatus?
     private var ownershipRecoveryTasks: [Task<Void, Never>] = []
+    private var ownershipMonitor: PlaybackProxyOwnershipMonitoring?
+    private var activeOwnershipMonitoringConfiguration:
+        PlaybackProxyOwnershipMonitoringConfiguration?
+    private var pendingForwardSourceTimeoutTask: Task<Void, Never>?
+    private var lastOwnershipReclaimAt: Date?
 
     public convenience init() {
         self.init(
             hidEnvironment: SystemHIDEnvironment(),
             appleMusicController: AppleMusicController(),
-            proxyFactory: { SystemNowPlayingProxyRuntime() }
+            proxyFactory: { SystemNowPlayingProxyRuntime() },
+            ownershipMonitorFactory: { SystemPlaybackProxyOwnershipMonitor() }
         )
     }
 
@@ -383,12 +408,19 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         hidEnvironment: HIDEnvironment,
         appleMusicController: AppleMusicControlling,
         proxyFactory: @escaping () -> NowPlayingProxyRuntimeControlling,
-        ownershipRecoveryDelays: [TimeInterval] = [0.08, 0.25, 0.6]
+        ownershipMonitorFactory: @escaping () -> PlaybackProxyOwnershipMonitoring =
+            { SystemPlaybackProxyOwnershipMonitor() },
+        ownershipRecoveryDelays: [TimeInterval] = [0.08, 0.25, 0.6],
+        forwardSourceCorrelationWindow: TimeInterval = 0.15,
+        ownershipReclaimCooldown: TimeInterval = 1
     ) {
         self.hidEnvironment = hidEnvironment
         self.appleMusicController = appleMusicController
         self.proxyFactory = proxyFactory
+        self.ownershipMonitorFactory = ownershipMonitorFactory
         self.ownershipRecoveryDelays = ownershipRecoveryDelays
+        self.forwardSourceCorrelationWindow = forwardSourceCorrelationWindow
+        self.ownershipReclaimCooldown = ownershipReclaimCooldown
 
         hidEnvironment.devicesDidChange = { [weak self] in
             Task { @MainActor in
@@ -401,11 +433,15 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         self.configuration = PlaybackProxyConfiguration(
             enabled: configuration.enabled,
             allowedForwardSourceMode: configuration.allowedForwardSourceMode,
-            allowedForwardSourceProductName: configuration.allowedForwardSourceProductName
+            allowedForwardSourceProductName: configuration.allowedForwardSourceProductName,
+            eventDrivenReclaimEnabled: configuration.eventDrivenReclaimEnabled,
+            pollInterval: configuration.pollInterval
         )
 
         if !configuration.enabled {
             pendingForwardSourcePress = nil
+            lastOwnershipReclaimAt = nil
+            cancelPendingForwardSourceTimeout()
         }
 
         reconcileState()
@@ -435,6 +471,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private func reconcileState() {
         if !configuration.enabled && !sourceCaptureIsActive {
             stopProxyIfNeeded()
+            stopOwnershipMonitoringIfNeeded()
             releaseAllObservedDevices()
             closeManagerIfNeeded()
             publishStatus(.disabled)
@@ -447,6 +484,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         if !inputMonitoringGranted {
             stopProxyIfNeeded()
+            stopOwnershipMonitoringIfNeeded()
             releaseAllObservedDevices()
             closeManagerIfNeeded()
 
@@ -467,6 +505,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             break
         case .denied:
             stopProxyIfNeeded()
+            stopOwnershipMonitoringIfNeeded()
             if !sourceCaptureIsActive {
                 releaseAllObservedDevices()
                 closeManagerIfNeeded()
@@ -475,6 +514,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         case .error(let message):
             stopProxyIfNeeded()
+            stopOwnershipMonitoringIfNeeded()
             if !sourceCaptureIsActive {
                 releaseAllObservedDevices()
                 closeManagerIfNeeded()
@@ -485,6 +525,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         guard openManagerIfNeeded() else {
             stopProxyIfNeeded()
+            stopOwnershipMonitoringIfNeeded()
             publishStatus(.error("The HID manager could not be opened."))
             return
         }
@@ -493,15 +534,18 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         if configuration.enabled {
             guard startProxyIfNeeded() else {
+                stopOwnershipMonitoringIfNeeded()
                 publishStatus(
                     .error("The Apple Music proxy could not be started.")
                 )
                 return
             }
 
+            refreshOwnershipMonitoringIfNeeded()
             publishStatus(.active(activeSourceDescription))
         } else {
             stopProxyIfNeeded()
+            stopOwnershipMonitoringIfNeeded()
             publishStatus(.disabled)
         }
     }
@@ -584,8 +628,38 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
     private func stopProxyIfNeeded() {
         cancelOwnershipRecoveryTasks()
+        cancelPendingForwardSourceTimeout()
+        pendingForwardSourcePress = nil
         proxyRuntime?.stop()
         proxyRuntime = nil
+    }
+
+    private func refreshOwnershipMonitoringIfNeeded() {
+        guard let monitoringConfiguration = configuration.ownershipMonitoringConfiguration else {
+            stopOwnershipMonitoringIfNeeded()
+            return
+        }
+
+        if ownershipMonitor == nil {
+            ownershipMonitor = ownershipMonitorFactory()
+        }
+
+        if activeOwnershipMonitoringConfiguration == monitoringConfiguration {
+            return
+        }
+
+        activeOwnershipMonitoringConfiguration = monitoringConfiguration
+        ownershipMonitor?.start(configuration: monitoringConfiguration) { [weak self] in
+            Task { @MainActor in
+                self?.refreshProxyOwnershipIfNeeded()
+            }
+        }
+    }
+
+    private func stopOwnershipMonitoringIfNeeded() {
+        ownershipMonitor?.stop()
+        ownershipMonitor = nil
+        activeOwnershipMonitoringConfiguration = nil
     }
 
     private func refreshObservedDevices() {
@@ -688,10 +762,13 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
-        pendingForwardSourcePress = PendingForwardSourcePress(
+        let pendingPress = PendingForwardSourcePress(
+            identifier: UUID(),
             observedAt: Date(),
             deviceLabel: event.device.preferredSourceLabel
         )
+        pendingForwardSourcePress = pendingPress
+        schedulePendingForwardSourceTimeout(for: pendingPress)
     }
 
     private func handleSourceCaptureEvent(_ event: HIDInputEvent) {
@@ -742,15 +819,30 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
-        refreshProxyOwnershipAfterForward()
-        publishStatus(.active(activeSourceDescription))
+        if reclaimProxyOwnership(
+            failureMessage: "The Apple Music proxy could not be restarted after forwarding.",
+            respectsCooldown: false
+        ) {
+            publishStatus(.active(activeSourceDescription))
+        }
     }
 
-    private func refreshProxyOwnershipAfterForward() {
+    private func reclaimProxyOwnership(
+        failureMessage: String,
+        respectsCooldown: Bool
+    ) -> Bool {
         guard configuration.enabled else {
-            return
+            return false
         }
 
+        if respectsCooldown, let lastOwnershipReclaimAt {
+            let elapsed = Date().timeIntervalSince(lastOwnershipReclaimAt)
+            if elapsed >= 0, elapsed < ownershipReclaimCooldown {
+                return true
+            }
+        }
+
+        lastOwnershipReclaimAt = Date()
         let hadRuntime = proxyRuntime != nil
         if hadRuntime {
             proxyRuntime?.stop()
@@ -758,11 +850,20 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         }
 
         if !startProxyIfNeeded() {
-            publishStatus(.error("The Apple Music proxy could not be restarted after forwarding."))
-            return
+            lastOwnershipReclaimAt = nil
+            publishStatus(.error(failureMessage))
+            return false
         }
 
         scheduleOwnershipRecoveryBursts()
+        return true
+    }
+
+    private func refreshProxyOwnershipIfNeeded() -> Bool {
+        reclaimProxyOwnership(
+            failureMessage: "The Apple Music proxy could not be restarted while reclaiming ownership.",
+            respectsCooldown: true
+        )
     }
 
     private func scheduleOwnershipRecoveryBursts() {
@@ -794,18 +895,62 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         ownershipRecoveryTasks.removeAll(keepingCapacity: false)
     }
 
+    private func schedulePendingForwardSourceTimeout(for pendingPress: PendingForwardSourcePress) {
+        cancelPendingForwardSourceTimeout()
+        let correlationWindow = forwardSourceCorrelationWindow
+
+        let timeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(
+                nanoseconds: UInt64(correlationWindow * 1_000_000_000)
+            )
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.handlePendingForwardSourceTimeout(identifier: pendingPress.identifier)
+        }
+        pendingForwardSourceTimeoutTask = timeoutTask
+    }
+
+    private func cancelPendingForwardSourceTimeout() {
+        pendingForwardSourceTimeoutTask?.cancel()
+        pendingForwardSourceTimeoutTask = nil
+    }
+
+    private func handlePendingForwardSourceTimeout(identifier: UUID) {
+        defer {
+            pendingForwardSourceTimeoutTask = nil
+        }
+
+        guard configuration.enabled else {
+            return
+        }
+
+        guard pendingForwardSourcePress?.identifier == identifier else {
+            return
+        }
+
+        pendingForwardSourcePress = nil
+        if refreshProxyOwnershipIfNeeded() {
+            publishStatus(.active(activeSourceDescription))
+        }
+    }
+
     private func consumeRecentForwardSourcePress() -> PendingForwardSourcePress? {
         guard let pendingForwardSourcePress else {
             return nil
         }
 
         let age = Date().timeIntervalSince(pendingForwardSourcePress.observedAt)
-        if age < 0 || age > 0.05 {
+        if age < 0 || age > forwardSourceCorrelationWindow {
             self.pendingForwardSourcePress = nil
+            cancelPendingForwardSourceTimeout()
             return nil
         }
 
         self.pendingForwardSourcePress = nil
+        cancelPendingForwardSourceTimeout()
         return pendingForwardSourcePress
     }
 

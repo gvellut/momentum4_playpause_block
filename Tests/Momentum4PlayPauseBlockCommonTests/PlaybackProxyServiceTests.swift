@@ -1,4 +1,5 @@
 @testable import Momentum4PlayPauseBlockCommon
+import Foundation
 import IOKit.hid
 import Testing
 
@@ -232,6 +233,219 @@ struct PlaybackProxyServiceTests {
     }
 
     @Test
+    func timedOwnershipMonitorTriggerRestartsProxyRuntime() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                pollInterval: 15
+            )
+        )
+        ownershipMonitor.triggerOwnershipRisk()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(ownershipMonitor.startConfigurations == [
+            PlaybackProxyOwnershipMonitoringConfiguration(
+                eventDrivenReclaimEnabled: false,
+                pollInterval: 15
+            )
+        ])
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
+    }
+
+    @Test
+    func eventDrivenOwnershipMonitorTriggerRestartsProxyRuntime() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.triggerOwnershipRisk()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(ownershipMonitor.startConfigurations == [
+            PlaybackProxyOwnershipMonitoringConfiguration(
+                eventDrivenReclaimEnabled: true,
+                pollInterval: nil
+            )
+        ])
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
+    }
+
+    @Test
+    func clusteredOwnershipMonitorTriggersAreDebounced() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        let thirdRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime, thirdRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 1
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.triggerOwnershipRisk()
+        ownershipMonitor.triggerOwnershipRisk()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(thirdRuntime.startCalls == 0)
+    }
+
+    @Test
+    func missingRemoteCommandAfterAllowedHIDPressReclaimsOwnership() async {
+        let environment = FakeHIDEnvironment()
+        let device = FakeHIDDevice(serviceID: 12, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        environment.devices = [device]
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: environment,
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            forwardSourceCorrelationWindow: 0.01,
+            ownershipReclaimCooldown: 0.05
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyKeyboard
+            )
+        )
+        device.emitInput(
+            usagePage: Int(kHIDPage_Consumer),
+            usage: Int(kHIDUsage_Csmr_PlayOrPause),
+            value: 1,
+            timestamp: 12
+        )
+        try? await Task.sleep(for: .milliseconds(30))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
+    }
+
+    @Test
+    func remoteCommandWithinCorrelationWindowCancelsTimeoutRecovery() async {
+        let environment = FakeHIDEnvironment()
+        let device = FakeHIDDevice(serviceID: 13, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        environment.devices = [device]
+        let appleMusic = FakeAppleMusicController()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        let thirdRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime, thirdRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: environment,
+            appleMusicController: appleMusic,
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            forwardSourceCorrelationWindow: 0.01,
+            ownershipReclaimCooldown: 0.05
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyKeyboard
+            )
+        )
+        device.emitInput(
+            usagePage: Int(kHIDPage_Consumer),
+            usage: Int(kHIDUsage_Csmr_PlayOrPause),
+            value: 1,
+            timestamp: 13
+        )
+        await Task.yield()
+        firstRuntime.emit(.togglePlayPause)
+        try? await Task.sleep(for: .milliseconds(30))
+
+        #expect(appleMusic.sentCommands == [.togglePlayPause])
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(thirdRuntime.startCalls == 0)
+    }
+
+    @Test
+    func ownershipMonitoringDisabledLeavesCurrentBehaviorUnchanged() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let runtime = FakeNowPlayingProxyRuntime()
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtime },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002]
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID
+            )
+        )
+        ownershipMonitor.triggerOwnershipRisk()
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(ownershipMonitor.startConfigurations.isEmpty)
+        #expect(runtime.stopCalls == 0)
+        #expect(runtime.startCalls == 1)
+        #expect(runtime.reassertNowPlayingStateCalls == 0)
+    }
+
+    @Test
     func sourceCaptureObservesOnlyKeyboardInterfaces() {
         let environment = FakeHIDEnvironment()
         let mouse = FakeHIDDevice(serviceID: 7, snapshot: .mouse(product: "USB Receiver"))
@@ -314,14 +528,44 @@ struct PlaybackProxyServiceTests {
     private func makeService(
         environment: FakeHIDEnvironment,
         appleMusic: FakeAppleMusicController,
-        runtime: FakeNowPlayingProxyRuntime
+        runtime: FakeNowPlayingProxyRuntime,
+        ownershipMonitor: FakePlaybackProxyOwnershipMonitor = FakePlaybackProxyOwnershipMonitor(),
+        forwardSourceCorrelationWindow: TimeInterval = 0.15,
+        ownershipReclaimCooldown: TimeInterval = 1
     ) -> PlaybackProxyService {
         PlaybackProxyService(
             hidEnvironment: environment,
             appleMusicController: appleMusic,
             proxyFactory: { runtime },
-            ownershipRecoveryDelays: [0.001, 0.002]
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            forwardSourceCorrelationWindow: forwardSourceCorrelationWindow,
+            ownershipReclaimCooldown: ownershipReclaimCooldown
         )
+    }
+}
+
+@MainActor
+private final class FakePlaybackProxyOwnershipMonitor: PlaybackProxyOwnershipMonitoring {
+    private(set) var startConfigurations: [PlaybackProxyOwnershipMonitoringConfiguration] = []
+    private(set) var stopCalls = 0
+    private var ownershipRiskHandler: (() -> Void)?
+
+    func start(
+        configuration: PlaybackProxyOwnershipMonitoringConfiguration,
+        onOwnershipRiskDetected: @escaping () -> Void
+    ) {
+        startConfigurations.append(configuration)
+        ownershipRiskHandler = onOwnershipRiskDetected
+    }
+
+    func stop() {
+        stopCalls += 1
+        ownershipRiskHandler = nil
+    }
+
+    func triggerOwnershipRisk() {
+        ownershipRiskHandler?()
     }
 }
 

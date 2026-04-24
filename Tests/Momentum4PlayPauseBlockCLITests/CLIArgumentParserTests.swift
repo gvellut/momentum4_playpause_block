@@ -11,6 +11,7 @@ struct CLIArgumentParserTests {
 
         #expect(parsed.allowedForwardSourceMode == .anyHID)
         #expect(parsed.allowedForwardSourceProductName.isEmpty)
+        #expect(parsed.ownershipPollInterval == CLIArguments.defaultOwnershipPollInterval)
     }
 
     @Test
@@ -29,6 +30,31 @@ struct CLIArgumentParserTests {
 
         #expect(parsed.allowedForwardSourceMode == .anyKeyboard)
         #expect(parsed.allowedForwardSourceProductName.isEmpty)
+    }
+
+    @Test
+    func parsesCustomOwnershipPollInterval() throws {
+        let parsed = try parser.parse(["--ownership-poll-interval", "2.5"])
+
+        #expect(parsed.ownershipPollInterval == 2.5)
+    }
+
+    @Test
+    func zeroOwnershipPollIntervalDisablesTimedBackstop() throws {
+        let parsed = try parser.parse(["--ownership-poll-interval=0"])
+
+        #expect(parsed.ownershipPollInterval == nil)
+    }
+
+    @Test
+    func rejectsInvalidOwnershipPollInterval() {
+        #expect(throws: CLIArgumentParserError.invalidOwnershipPollIntervalValue("-1")) {
+            try parser.parse(["--ownership-poll-interval", "-1"])
+        }
+
+        #expect(throws: CLIArgumentParserError.invalidOwnershipPollIntervalValue("abc")) {
+            try parser.parse(["--ownership-poll-interval=abc"])
+        }
     }
 
     @Test
@@ -58,5 +84,7 @@ struct CLIArgumentParserTests {
 
         #expect(helpText.contains("Apple Music-only"))
         #expect(helpText.contains("--forward-source"))
+        #expect(helpText.contains("--ownership-poll-interval"))
+        #expect(helpText.contains("15s"))
     }
 }

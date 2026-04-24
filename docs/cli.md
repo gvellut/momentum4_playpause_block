@@ -7,6 +7,8 @@ It does not use the app’s `UserDefaults`, menu bar UI, or Login Item support, 
 - swallow remote play/pause commands by default
 - allow forwarding only from the HID source mode you choose
 - send approved commands to Apple Music through AppleScript
+- keep event-driven ownership reclaim enabled
+- run a timed ownership-reclaim backstop unless you disable it
 
 ## Options
 
@@ -14,6 +16,9 @@ It does not use the app’s `UserDefaults`, menu bar UI, or Login Item support, 
   Default: `any-hid`
 - `--product-name "Exact HID Product Name"`
   Required only when `--forward-source specific-product-name` is used
+- `--ownership-poll-interval <seconds>`
+  Default: `15`
+  Use `0` to disable the timed backstop while keeping event-driven reclaim enabled
 
 ## Permissions
 
@@ -29,4 +34,5 @@ On some systems macOS may still require one relaunch after both permissions are 
 ## Notes
 
 - Apple Music only.
+- The CLI enables event-driven ownership reclaim by default and also reasserts ownership every `15s` unless you override `--ownership-poll-interval`.
 - The repo's supported script workflow packages the app bundle only; the CLI target remains available for development

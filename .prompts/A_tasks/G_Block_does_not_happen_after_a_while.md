@@ -1,0 +1,3 @@
+After a while, the block does not seem to work. The menubar app has run all along.
+At first I though that was because the mac computer went to slepp. But it seemed to happen even with no sleep. Just after a while (like 20min I have seen ; I have not tested all that much so not sure if typical). But it is consisent : the block stops every time after a while.
+Is it possible to detect if the silent sound you are playing is no longer the receipient of audio control messages. Maybe it has been taken by something else.  It could be detected in real time (preferrable without polling constantly) then reeasserts itself as the recipient. Work on the CLI for now. I want this to work. If you cannot detect without polling : add a way in the CLI to specify a pool interval
