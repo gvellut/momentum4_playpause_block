@@ -22,6 +22,6 @@
                 "any-hid"
             ],
             "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockCLI"
-        },
+        }
     ]
 }

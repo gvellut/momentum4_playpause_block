@@ -10,3 +10,7 @@ Swift UI
 VSCode or the CLI will be used for building (NOT XCode).
 
 Menubar app
+
+## Considerations
+
+Do not add Release launch configs + tasks, only debug.
