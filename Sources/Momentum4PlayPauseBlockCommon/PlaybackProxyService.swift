@@ -85,6 +85,7 @@ public enum PlaybackProxyStatus: Equatable, Sendable {
 public enum PlaybackProxyOwnershipReclaimReason: Equatable, Sendable {
     case forwardedCommand
     case systemDidWake
+    case screensDidWake
     case mediaRemoteNotification(String)
     case timedBackstopTick(TimeInterval)
     case missingExpectedRemoteCommand(sourceLabel: String, correlationWindow: TimeInterval)
@@ -102,6 +103,7 @@ public enum PlaybackProxyDiagnosticEvent: Equatable, Sendable {
         PlaybackProxyOwnershipReclaimReason,
         cooldown: TimeInterval
     )
+    case ownershipReclaimSkippedSleepSuspended(PlaybackProxyOwnershipReclaimReason)
     case ownershipReclaimSucceeded(PlaybackProxyOwnershipReclaimReason)
     case ownershipReclaimFailed(
         PlaybackProxyOwnershipReclaimReason,
@@ -393,6 +395,11 @@ private struct ObservedDeviceSession {
     let snapshot: HIDDeviceSnapshot
 }
 
+private enum PlaybackProxySleepSuspensionReason: Hashable {
+    case systemSleep
+    case screensSleep
+}
+
 @MainActor
 public final class PlaybackProxyService: PlaybackProxyControlling {
     public var statusDidChange: ((PlaybackProxyStatus) -> Void)?
@@ -407,6 +414,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private let ownershipRecoveryDelays: [TimeInterval]
     private let forwardSourceCorrelationWindow: TimeInterval
     private let ownershipReclaimCooldown: TimeInterval
+    private let sleepWakeResumeDelay: TimeInterval
 
     private var configuration = PlaybackProxyConfiguration(enabled: false)
     private var observedDeviceSessions: [io_service_t: ObservedDeviceSession] = [:]
@@ -422,6 +430,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         PlaybackProxyOwnershipMonitoringConfiguration?
     private var pendingForwardSourceTimeoutTask: Task<Void, Never>?
     private var lastOwnershipReclaimAt: Date?
+    private var sleepSuspensionReasons: Set<PlaybackProxySleepSuspensionReason> = []
+    private var sleepWakeResumeTask: Task<Void, Never>?
 
     public convenience init() {
         self.init(
@@ -440,7 +450,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             { SystemPlaybackProxyOwnershipMonitor() },
         ownershipRecoveryDelays: [TimeInterval] = [0.08, 0.25, 0.6],
         forwardSourceCorrelationWindow: TimeInterval = 0.15,
-        ownershipReclaimCooldown: TimeInterval = 1
+        ownershipReclaimCooldown: TimeInterval = 1,
+        sleepWakeResumeDelay: TimeInterval = 2
     ) {
         self.hidEnvironment = hidEnvironment
         self.appleMusicController = appleMusicController
@@ -449,6 +460,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         self.ownershipRecoveryDelays = ownershipRecoveryDelays
         self.forwardSourceCorrelationWindow = forwardSourceCorrelationWindow
         self.ownershipReclaimCooldown = ownershipReclaimCooldown
+        self.sleepWakeResumeDelay = max(0, sleepWakeResumeDelay)
 
         hidEnvironment.devicesDidChange = { [weak self] in
             Task { @MainActor in
@@ -469,6 +481,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         if !configuration.enabled {
             pendingForwardSourcePress = nil
             lastOwnershipReclaimAt = nil
+            clearSleepSuspensionState()
             cancelPendingForwardSourceTimeout()
         }
 
@@ -561,6 +574,14 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         refreshObservedDevices()
 
         if configuration.enabled {
+            refreshOwnershipMonitoringIfNeeded()
+
+            if isSleepSuspended {
+                stopProxyIfNeeded()
+                publishStatus(.active(activeSourceDescription))
+                return
+            }
+
             guard startProxyIfNeeded() else {
                 stopOwnershipMonitoringIfNeeded()
                 publishStatus(
@@ -569,7 +590,6 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
                 return
             }
 
-            refreshOwnershipMonitoringIfNeeded()
             publishStatus(.active(activeSourceDescription))
         } else {
             stopProxyIfNeeded()
@@ -694,16 +714,19 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         switch signal {
         case .systemWillSleep:
             emitDiagnostic(.systemWillSleep)
+            beginSleepSuspension(reason: .systemSleep)
 
         case .systemDidWake:
             emitDiagnostic(.systemDidWake)
-            _ = refreshProxyOwnershipIfNeeded(reason: .systemDidWake)
+            endSleepSuspension(reason: .systemSleep, reclaimReason: .systemDidWake)
 
         case .screensDidSleep:
             emitDiagnostic(.screensDidSleep)
+            beginSleepSuspension(reason: .screensSleep)
 
         case .screensDidWake:
             emitDiagnostic(.screensDidWake)
+            endSleepSuspension(reason: .screensSleep, reclaimReason: .screensDidWake)
 
         case .mediaRemoteNotification(let notificationName):
             emitDiagnostic(.mediaRemoteNotification(notificationName))
@@ -713,6 +736,77 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             emitDiagnostic(.timedBackstopTick(interval))
             _ = refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
         }
+    }
+
+    private var isSleepSuspended: Bool {
+        !sleepSuspensionReasons.isEmpty || sleepWakeResumeTask != nil
+    }
+
+    private func beginSleepSuspension(reason: PlaybackProxySleepSuspensionReason) {
+        cancelSleepWakeResumeTask()
+        sleepSuspensionReasons.insert(reason)
+        stopProxyIfNeeded()
+    }
+
+    private func endSleepSuspension(
+        reason: PlaybackProxySleepSuspensionReason,
+        reclaimReason: PlaybackProxyOwnershipReclaimReason
+    ) {
+        sleepSuspensionReasons.remove(reason)
+
+        guard sleepSuspensionReasons.isEmpty else {
+            return
+        }
+
+        scheduleSleepWakeResume(reason: reclaimReason)
+    }
+
+    private func scheduleSleepWakeResume(reason: PlaybackProxyOwnershipReclaimReason) {
+        cancelSleepWakeResumeTask()
+
+        let resumeDelay = sleepWakeResumeDelay
+        let task = Task { @MainActor [weak self] in
+            if resumeDelay > 0 {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(resumeDelay * 1_000_000_000)
+                )
+            } else {
+                await Task.yield()
+            }
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.resumeProxyAfterSleepSuspension(reason: reason)
+        }
+        sleepWakeResumeTask = task
+    }
+
+    private func resumeProxyAfterSleepSuspension(reason: PlaybackProxyOwnershipReclaimReason) {
+        sleepWakeResumeTask = nil
+
+        guard configuration.enabled, sleepSuspensionReasons.isEmpty else {
+            return
+        }
+
+        if reclaimProxyOwnership(
+            reason: reason,
+            failureMessage: "The Apple Music proxy could not be restarted after wake.",
+            respectsCooldown: false
+        ) {
+            publishStatus(.active(activeSourceDescription))
+        }
+    }
+
+    private func clearSleepSuspensionState() {
+        sleepSuspensionReasons.removeAll(keepingCapacity: false)
+        cancelSleepWakeResumeTask()
+    }
+
+    private func cancelSleepWakeResumeTask() {
+        sleepWakeResumeTask?.cancel()
+        sleepWakeResumeTask = nil
     }
 
     private func refreshObservedDevices() {
@@ -811,6 +905,10 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
+        guard !isSleepSuspended else {
+            return
+        }
+
         guard event.value != 0, isForwardTriggerEvent(event), matchesForwardSource(event.device) else {
             return
         }
@@ -862,6 +960,10 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
+        guard !isSleepSuspended else {
+            return
+        }
+
         guard consumeRecentForwardSourcePress() != nil else {
             return
         }
@@ -888,6 +990,11 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     ) -> Bool {
         guard configuration.enabled else {
             return false
+        }
+
+        if isSleepSuspended {
+            emitDiagnostic(.ownershipReclaimSkippedSleepSuspended(reason))
+            return true
         }
 
         if respectsCooldown, let lastOwnershipReclaimAt {

@@ -170,6 +170,8 @@ final class CLIApplication {
         case .ownershipReclaimSkippedCooldown(let reason, let cooldown):
             return
                 "ownership reclaim skipped due to cooldown (\(CLIArguments.formattedSeconds(cooldown))): \(diagnosticReasonMessage(reason))"
+        case .ownershipReclaimSkippedSleepSuspended(let reason):
+            return "ownership reclaim skipped while sleep suspended: \(diagnosticReasonMessage(reason))"
         case .ownershipReclaimSucceeded(let reason):
             return "ownership reclaim succeeded: \(diagnosticReasonMessage(reason))"
         case .ownershipReclaimFailed(let reason, let message):
@@ -183,6 +185,8 @@ final class CLIApplication {
             return "post-forward reclaim"
         case .systemDidWake:
             return "system wake"
+        case .screensDidWake:
+            return "screens wake"
         case .mediaRemoteNotification(let notificationName):
             return "mediaremote notification \(notificationName)"
         case .timedBackstopTick(let interval):
