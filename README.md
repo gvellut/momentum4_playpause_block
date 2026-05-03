@@ -10,6 +10,7 @@ It solves the issue I have where every smart feature (including on-head detectio
 - HID correlation so only approved HID play/pause presses are treated as real local input.
 - Apple Music forwarding through `osascript` for approved presses
 - swallowing of remote play/pause commands that do not correlate with an allowed HID source
+- event-driven ownership reclaim plus a `15s` timed backstop so the proxy is restored after sleep, wake, or macOS media ownership changes
 - the menu bar app stays in the menu bar unless you choose to hide it
 
 ## Limitations
@@ -45,6 +46,24 @@ The supported path needs:
   Needed because the approved play/pause command is forwarded to Apple Music through AppleScript.
 
 Enable blocking from Settings to trigger the permission flow. On some systems macOS may still require one relaunch after both permissions are granted.
+
+## Console Logs
+
+The menu bar app writes playback proxy diagnostics to Console with subsystem `com.vellut.momentum4playpauseblock` and category `PlaybackProxy`. These logs include sleep, wake, screen sleep, screen wake, MediaRemote notifications, timed backstop ticks, and ownership reclaim results.
+
+Stream live logs:
+
+```bash
+log stream --style compact --level info --predicate 'subsystem == "com.vellut.momentum4playpauseblock" && category == "PlaybackProxy"'
+```
+
+Show recent logs:
+
+```bash
+log show --last 30m --style compact --info --predicate 'subsystem == "com.vellut.momentum4playpauseblock" && category == "PlaybackProxy"'
+```
+
+In Console.app, filter by subsystem `com.vellut.momentum4playpauseblock` and category `PlaybackProxy`.
 
 ## Building The App
 

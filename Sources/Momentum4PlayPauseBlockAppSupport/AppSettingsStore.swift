@@ -1,8 +1,11 @@
 import Foundation
 import Momentum4PlayPauseBlockCommon
+import OSLog
 
 @MainActor
 public final class AppSettingsStore: ObservableObject {
+    private static let ownershipPollInterval: TimeInterval = 15
+
     @Published public private(set) var blockingEnabled: Bool
     @Published public private(set) var blockingRequested: Bool
 
@@ -123,8 +126,10 @@ public final class AppSettingsStore: ObservableObject {
         proxyController: PlaybackProxyControlling? = nil,
         launchAtLoginController: LaunchAtLoginControlling? = nil
     ) {
+        let resolvedProxyController = proxyController ?? PlaybackProxyService()
+
         self.defaults = defaults
-        self.proxyController = proxyController ?? PlaybackProxyService()
+        self.proxyController = resolvedProxyController
         self.launchAtLoginController = launchAtLoginController ?? LaunchAtLoginController()
 
         let storedMode = AllowedForwardSourceMode(
@@ -180,6 +185,12 @@ public final class AppSettingsStore: ObservableObject {
         self.proxyController.sourceCaptureDidFail = { [weak self] message in
             Task { @MainActor in
                 self?.handleSourceCaptureFailure(message)
+            }
+        }
+
+        if let proxyService = resolvedProxyController as? PlaybackProxyService {
+            proxyService.diagnosticDidEmit = { event in
+                PlaybackProxyConsoleLogger.log(event)
             }
         }
     }
@@ -292,10 +303,8 @@ public final class AppSettingsStore: ObservableObject {
         }
 
         proxyController.apply(
-            configuration: PlaybackProxyConfiguration(
-                enabled: false,
-                allowedForwardSourceMode: allowedForwardSourceMode,
-                allowedForwardSourceProductName: allowedForwardSourceProductName
+            configuration: appProxyConfiguration(
+                enabled: false
             )
         )
         applyProxyConfiguration()
@@ -370,11 +379,19 @@ public final class AppSettingsStore: ObservableObject {
 
     private func applyProxyConfiguration() {
         proxyController.apply(
-            configuration: PlaybackProxyConfiguration(
-                enabled: blockingRequested && canEnableBlocking,
-                allowedForwardSourceMode: allowedForwardSourceMode,
-                allowedForwardSourceProductName: allowedForwardSourceProductName
+            configuration: appProxyConfiguration(
+                enabled: blockingRequested && canEnableBlocking
             )
+        )
+    }
+
+    private func appProxyConfiguration(enabled: Bool) -> PlaybackProxyConfiguration {
+        PlaybackProxyConfiguration(
+            enabled: enabled,
+            allowedForwardSourceMode: allowedForwardSourceMode,
+            allowedForwardSourceProductName: allowedForwardSourceProductName,
+            eventDrivenReclaimEnabled: true,
+            pollInterval: Self.ownershipPollInterval
         )
     }
 
@@ -425,5 +442,86 @@ public final class AppSettingsStore: ObservableObject {
         suppressSideEffects = true
         openAtLogin = value
         suppressSideEffects = false
+    }
+}
+
+private enum PlaybackProxyConsoleLogger {
+    private static let logger = Logger(
+        subsystem: "com.vellut.momentum4playpauseblock",
+        category: "PlaybackProxy"
+    )
+
+    static func log(_ event: PlaybackProxyDiagnosticEvent) {
+        let message = message(for: event)
+
+        switch event {
+        case .ownershipReclaimFailed:
+            logger.error("\(message, privacy: .public)")
+        case .systemWillSleep,
+            .systemDidWake,
+            .screensDidSleep,
+            .screensDidWake,
+            .mediaRemoteNotification,
+            .timedBackstopTick,
+            .ownershipReclaimStarted,
+            .ownershipReclaimSkippedCooldown,
+            .ownershipReclaimSkippedSleepSuspended,
+            .ownershipReclaimSucceeded:
+            logger.info("\(message, privacy: .public)")
+        }
+    }
+
+    private static func message(for event: PlaybackProxyDiagnosticEvent) -> String {
+        switch event {
+        case .systemWillSleep:
+            return "system will sleep"
+        case .systemDidWake:
+            return "system did wake"
+        case .screensDidSleep:
+            return "screens did sleep"
+        case .screensDidWake:
+            return "screens did wake"
+        case .mediaRemoteNotification(let notificationName):
+            return "mediaremote notification \(notificationName)"
+        case .timedBackstopTick(let interval):
+            return "timed ownership backstop tick (\(formattedSeconds(interval)))"
+        case .ownershipReclaimStarted(let reason):
+            return "ownership reclaim started: \(message(for: reason))"
+        case .ownershipReclaimSkippedCooldown(let reason, let cooldown):
+            return
+                "ownership reclaim skipped due to cooldown (\(formattedSeconds(cooldown))): \(message(for: reason))"
+        case .ownershipReclaimSkippedSleepSuspended(let reason):
+            return "ownership reclaim skipped while sleep suspended: \(message(for: reason))"
+        case .ownershipReclaimSucceeded(let reason):
+            return "ownership reclaim succeeded: \(message(for: reason))"
+        case .ownershipReclaimFailed(let reason, let message):
+            return "ownership reclaim failed: \(Self.message(for: reason)); \(message)"
+        }
+    }
+
+    private static func message(for reason: PlaybackProxyOwnershipReclaimReason) -> String {
+        switch reason {
+        case .forwardedCommand:
+            return "post-forward reclaim"
+        case .systemDidWake:
+            return "system wake"
+        case .screensDidWake:
+            return "screens wake"
+        case .mediaRemoteNotification(let notificationName):
+            return "mediaremote notification \(notificationName)"
+        case .timedBackstopTick(let interval):
+            return "timed backstop tick (\(formattedSeconds(interval)))"
+        case .missingExpectedRemoteCommand(let sourceLabel, let correlationWindow):
+            return
+                "expected remote command did not arrive after HID press from \(sourceLabel) within \(formattedSeconds(correlationWindow))"
+        }
+    }
+
+    private static func formattedSeconds(_ value: TimeInterval) -> String {
+        if value == value.rounded() {
+            return "\(Int(value))s"
+        }
+
+        return "\(value)s"
     }
 }

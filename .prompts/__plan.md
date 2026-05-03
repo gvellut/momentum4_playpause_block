@@ -1,5 +1,3 @@
-* [Block does not happen after a while](A_tasks/G_Block_does_not_happen_after_a_while.md)
-    ? [Disable on sleep](A_tasks/G.A_Disable_on_sleep.md)
 ! [Initialization](A_tasks/A_Initialization.md)
     !? [cli](A_tasks/A.A_cli.md)
     !? [Id not found](A_tasks/A.B_Id_not_found.md)
@@ -8,3 +6,6 @@
 ! [Convert to app](A_tasks/D_Convert_to_app.md)
 ! [Arrange UX](A_tasks/E_Arrange_UX.md)
 ! [Change GUI](A_tasks/F_Change_GUI.md)
+! [Block does not happen after a while](A_tasks/G_Block_does_not_happen_after_a_while.md)
+    !? [Disable on sleep](A_tasks/G.A_Disable_on_sleep.md)
+! [Port to main app](A_tasks/H_Port_to_main_app.md)

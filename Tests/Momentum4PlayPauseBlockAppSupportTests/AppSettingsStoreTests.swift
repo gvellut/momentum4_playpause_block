@@ -46,9 +46,29 @@ struct AppSettingsStoreTests {
                 == PlaybackProxyConfiguration(
                     enabled: false,
                     allowedForwardSourceMode: .specificProductName,
-                    allowedForwardSourceProductName: ""
+                    allowedForwardSourceProductName: "",
+                    eventDrivenReclaimEnabled: true,
+                    pollInterval: 15
                 )
         )
+    }
+
+    @Test
+    func appliedProxyConfigurationsEnableMenubarOwnershipReclaimDefaults() {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.setBlockingRequested(true)
+
+        let configuration = proxyController.configurations.last
+        #expect(configuration?.enabled == true)
+        #expect(configuration?.eventDrivenReclaimEnabled == true)
+        #expect(configuration?.pollInterval == 15)
     }
 
     @Test
@@ -270,6 +290,11 @@ struct AppSettingsStoreTests {
         store.restartBlockingIfRequestedForRuntimeModeChange()
 
         #expect(proxyController.configurations.suffix(2).map(\.enabled) == [false, true])
+        #expect(
+            proxyController.configurations.suffix(2).allSatisfy {
+                $0.eventDrivenReclaimEnabled && $0.pollInterval == 15
+            }
+        )
     }
 
     @Test
