@@ -29,7 +29,6 @@ final class SystemHIDEnvironment: HIDEnvironment {
     var devicesDidChange: (() -> Void)?
 
     private let manager: IOHIDManager
-    private var deviceCache: [io_service_t: SystemHIDDevice] = [:]
 
     init() {
         manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -71,17 +70,9 @@ final class SystemHIDEnvironment: HIDEnvironment {
             return []
         }
 
-        return (rawDevices as NSSet).allObjects.map { rawDevice in
+        return (rawDevices as NSSet).allObjects.map { rawDevice -> HIDDeviceControlling in
             let device = rawDevice as! IOHIDDevice
-            let serviceID = IOHIDDeviceGetService(device)
-
-            if let cachedDevice = deviceCache[serviceID] {
-                return cachedDevice
-            }
-
-            let cachedDevice = SystemHIDDevice(device: device)
-            deviceCache[serviceID] = cachedDevice
-            return cachedDevice
+            return SystemHIDDevice(device: device)
         }
     }
 

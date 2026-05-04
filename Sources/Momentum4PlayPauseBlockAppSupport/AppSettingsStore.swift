@@ -457,6 +457,8 @@ private enum PlaybackProxyConsoleLogger {
         switch event {
         case .ownershipReclaimFailed:
             logger.error("\(message, privacy: .public)")
+        case .hidObservationOpenFailed:
+            logger.warning("\(message, privacy: .public)")
         case .systemWillSleep,
             .systemDidWake,
             .screensDidSleep,
@@ -485,6 +487,13 @@ private enum PlaybackProxyConsoleLogger {
             return "mediaremote notification \(notificationName)"
         case .timedBackstopTick(let interval):
             return "timed ownership backstop tick (\(formattedSeconds(interval)))"
+        case .hidObservationOpenFailed(
+            let sourceDescription,
+            let serviceID,
+            let resultDescription
+        ):
+            return
+                "hid observation open failed: \(sourceDescription) service=\(serviceID) result=\(resultDescription)"
         case .ownershipReclaimStarted(let reason):
             return "ownership reclaim started: \(message(for: reason))"
         case .ownershipReclaimSkippedCooldown(let reason, let cooldown):

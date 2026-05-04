@@ -165,6 +165,13 @@ final class CLIApplication {
             return "mediaremote notification \(notificationName)"
         case .timedBackstopTick(let interval):
             return "timed ownership backstop tick (\(CLIArguments.formattedSeconds(interval)))"
+        case .hidObservationOpenFailed(
+            let sourceDescription,
+            let serviceID,
+            let resultDescription
+        ):
+            return
+                "hid observation open failed: \(sourceDescription) service=\(serviceID) result=\(resultDescription)"
         case .ownershipReclaimStarted(let reason):
             return "ownership reclaim started: \(diagnosticReasonMessage(reason))"
         case .ownershipReclaimSkippedCooldown(let reason, let cooldown):

@@ -98,6 +98,11 @@ public enum PlaybackProxyDiagnosticEvent: Equatable, Sendable {
     case screensDidWake
     case mediaRemoteNotification(String)
     case timedBackstopTick(TimeInterval)
+    case hidObservationOpenFailed(
+        sourceDescription: String,
+        serviceID: UInt32,
+        resultDescription: String
+    )
     case ownershipReclaimStarted(PlaybackProxyOwnershipReclaimReason)
     case ownershipReclaimSkippedCooldown(
         PlaybackProxyOwnershipReclaimReason,
@@ -734,6 +739,9 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         case .timedBackstopTick(let interval):
             emitDiagnostic(.timedBackstopTick(interval))
+            if !isSleepSuspended {
+                refreshObservedDevices()
+            }
             _ = refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
         }
     }
@@ -746,6 +754,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         cancelSleepWakeResumeTask()
         sleepSuspensionReasons.insert(reason)
         stopProxyIfNeeded()
+        releaseAllObservedDevices()
     }
 
     private func endSleepSuspension(
@@ -789,6 +798,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         guard configuration.enabled, sleepSuspensionReasons.isEmpty else {
             return
         }
+
+        refreshObservedDevices()
 
         if reclaimProxyOwnership(
             reason: reason,
@@ -867,9 +878,15 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         let openResult = device.open(options: IOOptionBits(kIOHIDOptionsTypeNone))
         guard openResult == kIOReturnSuccess else {
-            device.unscheduleFromMainRunLoop()
             device.setInputValueHandler(nil)
-            publishStatus(.error("A HID source could not be opened for observation."))
+            device.unscheduleFromMainRunLoop()
+            emitDiagnostic(
+                .hidObservationOpenFailed(
+                    sourceDescription: device.snapshot.preferredSourceLabel,
+                    serviceID: device.serviceID,
+                    resultDescription: formatIOReturn(openResult)
+                )
+            )
             return
         }
 
@@ -1167,5 +1184,10 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
     private func emitDiagnostic(_ event: PlaybackProxyDiagnosticEvent) {
         diagnosticDidEmit?(event)
+    }
+
+    private func formatIOReturn(_ result: IOReturn) -> String {
+        let hex = String(UInt32(bitPattern: result), radix: 16, uppercase: true)
+        return "\(result) (0x\(hex))"
     }
 }
