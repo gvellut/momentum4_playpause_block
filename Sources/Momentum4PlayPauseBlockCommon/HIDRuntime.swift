@@ -29,6 +29,7 @@ final class SystemHIDEnvironment: HIDEnvironment {
     var devicesDidChange: (() -> Void)?
 
     private let manager: IOHIDManager
+    private var devicesByIdentity: [ObjectIdentifier: SystemHIDDevice] = [:]
 
     init() {
         manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
@@ -72,8 +73,25 @@ final class SystemHIDEnvironment: HIDEnvironment {
 
         return (rawDevices as NSSet).allObjects.map { rawDevice -> HIDDeviceControlling in
             let device = rawDevice as! IOHIDDevice
-            return SystemHIDDevice(device: device)
+            return cachedDevice(for: device)
         }
+    }
+
+    private func cachedDevice(for device: IOHIDDevice) -> SystemHIDDevice {
+        let identity = ObjectIdentifier(device as AnyObject)
+        if let cachedDevice = devicesByIdentity[identity] {
+            return cachedDevice
+        }
+
+        let cachedDevice = SystemHIDDevice(device: device)
+        devicesByIdentity[identity] = cachedDevice
+        return cachedDevice
+    }
+
+    private func handleDeviceRemoval(_ device: IOHIDDevice) {
+        let identity = ObjectIdentifier(device as AnyObject)
+        devicesByIdentity[identity]?.prepareForRemoval()
+        devicesDidChange?()
     }
 
     private static let deviceMatchingCallback: IOHIDDeviceCallback = { context, _, _, _ in
@@ -85,13 +103,13 @@ final class SystemHIDEnvironment: HIDEnvironment {
         environment.devicesDidChange?()
     }
 
-    private static let deviceRemovalCallback: IOHIDDeviceCallback = { context, _, _, _ in
+    private static let deviceRemovalCallback: IOHIDDeviceCallback = { context, _, _, device in
         guard let context else {
             return
         }
 
         let environment = Unmanaged<SystemHIDEnvironment>.fromOpaque(context).takeUnretainedValue()
-        environment.devicesDidChange?()
+        environment.handleDeviceRemoval(device)
     }
 }
 
@@ -102,6 +120,9 @@ private final class SystemHIDDevice: HIDDeviceControlling {
 
     private let device: IOHIDDevice
     private var inputValueHandler: ((HIDInputEvent) -> Void)?
+    private var isOpen = false
+    private var isScheduled = false
+    private var isObservingInput = false
 
     init(device: IOHIDDevice) {
         self.device = device
@@ -110,41 +131,74 @@ private final class SystemHIDDevice: HIDDeviceControlling {
     }
 
     func open(options: IOOptionBits) -> IOReturn {
-        IOHIDDeviceOpen(device, options)
+        guard !isOpen else {
+            return kIOReturnSuccess
+        }
+
+        let result = IOHIDDeviceOpen(device, options)
+        if result == kIOReturnSuccess {
+            isOpen = true
+        }
+        return result
     }
 
     func close() {
+        guard isOpen else {
+            return
+        }
+
         IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+        isOpen = false
     }
 
     func scheduleWithMainRunLoop() {
+        guard !isScheduled else {
+            return
+        }
+
         IOHIDDeviceScheduleWithRunLoop(device, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        isScheduled = true
     }
 
     func unscheduleFromMainRunLoop() {
+        guard isScheduled else {
+            return
+        }
+
         IOHIDDeviceUnscheduleFromRunLoop(
             device,
             CFRunLoopGetMain(),
             CFRunLoopMode.defaultMode.rawValue
         )
+        isScheduled = false
     }
 
     func setInputValueHandler(_ handler: ((HIDInputEvent) -> Void)?) {
         inputValueHandler = handler
+        isObservingInput = handler != nil
 
-        let context = handler.map { _ in
-            UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        guard handler != nil else {
+            IOHIDDeviceRegisterInputValueCallback(device, nil, nil)
+            return
         }
+
+        let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
 
         IOHIDDeviceRegisterInputValueCallback(
             device,
-            handler == nil ? nil : Self.inputValueCallback,
+            Self.inputValueCallback,
             context
         )
     }
 
+    func prepareForRemoval() {
+        setInputValueHandler(nil)
+        unscheduleFromMainRunLoop()
+        close()
+    }
+
     private func handleInputValue(_ value: IOHIDValue) {
-        guard let inputValueHandler else {
+        guard isObservingInput, let inputValueHandler else {
             return
         }
 

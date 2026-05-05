@@ -400,6 +400,11 @@ private struct ObservedDeviceSession {
     let snapshot: HIDDeviceSnapshot
 }
 
+private struct HIDObservationOpenFailure: Equatable {
+    let snapshot: HIDDeviceSnapshot
+    let resultDescription: String
+}
+
 private enum PlaybackProxySleepSuspensionReason: Hashable {
     case systemSleep
     case screensSleep
@@ -437,6 +442,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private var lastOwnershipReclaimAt: Date?
     private var sleepSuspensionReasons: Set<PlaybackProxySleepSuspensionReason> = []
     private var sleepWakeResumeTask: Task<Void, Never>?
+    private var hidObservationOpenFailures: [io_service_t: HIDObservationOpenFailure] = [:]
 
     public convenience init() {
         self.init(
@@ -486,6 +492,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         if !configuration.enabled {
             pendingForwardSourcePress = nil
             lastOwnershipReclaimAt = nil
+            hidObservationOpenFailures.removeAll(keepingCapacity: false)
             clearSleepSuspensionState()
             cancelPendingForwardSourceTimeout()
         }
@@ -739,10 +746,12 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         case .timedBackstopTick(let interval):
             emitDiagnostic(.timedBackstopTick(interval))
-            if !isSleepSuspended {
-                refreshObservedDevices()
+            guard !isSleepSuspended else {
+                return
             }
-            _ = refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
+
+            refreshObservedDevices()
+            _ = softlyRefreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
         }
     }
 
@@ -829,12 +838,24 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         let desiredDevices = devices.filter { shouldObserveDevice($0.snapshot) }
         let desiredServiceIDs = Set(desiredDevices.map(\.serviceID))
 
+        for serviceID in Set(hidObservationOpenFailures.keys).subtracting(desiredServiceIDs) {
+            hidObservationOpenFailures[serviceID] = nil
+        }
+
         for serviceID in Set(observedDeviceSessions.keys).subtracting(desiredServiceIDs) {
             releaseObservedDevice(serviceID: serviceID)
         }
 
-        for device in desiredDevices where observedDeviceSessions[device.serviceID] == nil {
-            observeDevice(device)
+        for device in desiredDevices {
+            if let session = observedDeviceSessions[device.serviceID],
+                ObjectIdentifier(session.device) != ObjectIdentifier(device)
+            {
+                releaseObservedDevice(serviceID: device.serviceID)
+            }
+
+            if observedDeviceSessions[device.serviceID] == nil {
+                observeDevice(device)
+            }
         }
     }
 
@@ -880,16 +901,11 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         guard openResult == kIOReturnSuccess else {
             device.setInputValueHandler(nil)
             device.unscheduleFromMainRunLoop()
-            emitDiagnostic(
-                .hidObservationOpenFailed(
-                    sourceDescription: device.snapshot.preferredSourceLabel,
-                    serviceID: device.serviceID,
-                    resultDescription: formatIOReturn(openResult)
-                )
-            )
+            emitHIDObservationOpenFailureIfNeeded(device: device, openResult: openResult)
             return
         }
 
+        hidObservationOpenFailures[device.serviceID] = nil
         observedDeviceSessions[device.serviceID] = ObservedDeviceSession(
             device: device,
             serviceID: device.serviceID,
@@ -911,6 +927,30 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         for serviceID in Array(observedDeviceSessions.keys) {
             releaseObservedDevice(serviceID: serviceID)
         }
+    }
+
+    private func emitHIDObservationOpenFailureIfNeeded(
+        device: HIDDeviceControlling,
+        openResult: IOReturn
+    ) {
+        let resultDescription = formatIOReturn(openResult)
+        let failure = HIDObservationOpenFailure(
+            snapshot: device.snapshot,
+            resultDescription: resultDescription
+        )
+
+        guard hidObservationOpenFailures[device.serviceID] != failure else {
+            return
+        }
+
+        hidObservationOpenFailures[device.serviceID] = failure
+        emitDiagnostic(
+            .hidObservationOpenFailed(
+                sourceDescription: device.snapshot.preferredSourceLabel,
+                serviceID: device.serviceID,
+                resultDescription: resultDescription
+            )
+        )
     }
 
     private func handleInputEvent(_ event: HIDInputEvent) {
@@ -1055,6 +1095,31 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             failureMessage: "The Apple Music proxy could not be restarted while reclaiming ownership.",
             respectsCooldown: true
         )
+    }
+
+    private func softlyRefreshProxyOwnershipIfNeeded(
+        reason: PlaybackProxyOwnershipReclaimReason
+    ) -> Bool {
+        guard configuration.enabled else {
+            return false
+        }
+
+        if isSleepSuspended {
+            emitDiagnostic(.ownershipReclaimSkippedSleepSuspended(reason))
+            return true
+        }
+
+        guard let proxyRuntime else {
+            return reclaimProxyOwnership(
+                reason: reason,
+                failureMessage:
+                    "The Apple Music proxy could not be restarted while reclaiming ownership.",
+                respectsCooldown: true
+            )
+        }
+
+        proxyRuntime.reassertNowPlayingState()
+        return true
     }
 
     private func scheduleOwnershipRecoveryBursts() {
