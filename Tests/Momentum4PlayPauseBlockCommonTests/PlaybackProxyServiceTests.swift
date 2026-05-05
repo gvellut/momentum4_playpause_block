@@ -233,11 +233,12 @@ struct PlaybackProxyServiceTests {
     }
 
     @Test
-    func timedOwnershipMonitorTriggerSoftlyReassertsCurrentRuntime() async {
+    func timedOwnershipMonitorTriggerRestartsProxyRuntime() async {
         let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
         let firstRuntime = FakeNowPlayingProxyRuntime()
         let secondRuntime = FakeNowPlayingProxyRuntime()
         var runtimes = [firstRuntime, secondRuntime]
+        var diagnostics: [PlaybackProxyDiagnosticEvent] = []
 
         let service = PlaybackProxyService(
             hidEnvironment: FakeHIDEnvironment(),
@@ -247,6 +248,7 @@ struct PlaybackProxyServiceTests {
             ownershipRecoveryDelays: [0.001, 0.002],
             ownershipReclaimCooldown: 0.05
         )
+        service.diagnosticDidEmit = { diagnostics.append($0) }
 
         service.apply(
             configuration: PlaybackProxyConfiguration(
@@ -265,9 +267,13 @@ struct PlaybackProxyServiceTests {
             )
         ])
         #expect(firstRuntime.startCalls == 1)
-        #expect(firstRuntime.stopCalls == 0)
-        #expect(firstRuntime.reassertNowPlayingStateCalls == 1)
-        #expect(secondRuntime.startCalls == 0)
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(firstRuntime.reassertNowPlayingStateCalls == 0)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
+        #expect(diagnostics.contains(.timedBackstopTick(15)))
+        #expect(diagnostics.contains(.ownershipReclaimStarted(.timedBackstopTick(15))))
+        #expect(diagnostics.contains(.ownershipReclaimSucceeded(.timedBackstopTick(15))))
     }
 
     @Test
@@ -608,9 +614,10 @@ struct PlaybackProxyServiceTests {
 
         #expect(device.openCalls == 2)
         #expect(device.isObservingInput)
-        #expect(firstRuntime.stopCalls == 0)
-        #expect(firstRuntime.reassertNowPlayingStateCalls == 1)
-        #expect(secondRuntime.startCalls == 0)
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(firstRuntime.reassertNowPlayingStateCalls == 0)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls == 3)
     }
 
     @Test
@@ -944,7 +951,7 @@ struct PlaybackProxyServiceTests {
         #expect(firstRuntime.stopCalls == 1)
         #expect(secondRuntime.startCalls == 0)
         #expect(
-            !diagnostics.contains(
+            diagnostics.contains(
                 .ownershipReclaimSkippedSleepSuspended(.timedBackstopTick(15))
             )
         )

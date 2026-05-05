@@ -747,11 +747,16 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         case .timedBackstopTick(let interval):
             emitDiagnostic(.timedBackstopTick(interval))
             guard !isSleepSuspended else {
+                emitDiagnostic(
+                    .ownershipReclaimSkippedSleepSuspended(
+                        .timedBackstopTick(interval)
+                    )
+                )
                 return
             }
 
             refreshObservedDevices()
-            _ = softlyRefreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
+            _ = refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
         }
     }
 
@@ -1095,31 +1100,6 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             failureMessage: "The Apple Music proxy could not be restarted while reclaiming ownership.",
             respectsCooldown: true
         )
-    }
-
-    private func softlyRefreshProxyOwnershipIfNeeded(
-        reason: PlaybackProxyOwnershipReclaimReason
-    ) -> Bool {
-        guard configuration.enabled else {
-            return false
-        }
-
-        if isSleepSuspended {
-            emitDiagnostic(.ownershipReclaimSkippedSleepSuspended(reason))
-            return true
-        }
-
-        guard let proxyRuntime else {
-            return reclaimProxyOwnership(
-                reason: reason,
-                failureMessage:
-                    "The Apple Music proxy could not be restarted while reclaiming ownership.",
-                respectsCooldown: true
-            )
-        }
-
-        proxyRuntime.reassertNowPlayingState()
-        return true
     }
 
     private func scheduleOwnershipRecoveryBursts() {
