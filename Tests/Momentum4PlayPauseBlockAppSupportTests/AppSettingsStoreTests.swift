@@ -5,6 +5,10 @@ import Testing
 
 @MainActor
 struct AppSettingsStoreTests {
+    private let expectedPermissionSetupExplanation =
+        "To finish setup: allow Input Monitoring for this app, then relaunch it. "
+        + "After relaunch, if Input Monitoring is enabled, macOS will ask you to allow Automation control of Apple Music so approved play/pause presses can be forwarded."
+
     @Test
     func defaultsUseAnyHIDAndDoNotEnableBlocking() {
         let defaults = makeDefaults()
@@ -22,6 +26,7 @@ struct AppSettingsStoreTests {
         #expect(store.allowedForwardSourceMode == .anyHID)
         #expect(store.allowedForwardSourceProductName.isEmpty)
         #expect(store.canEnableBlocking)
+        #expect(store.permissionSetupExplanation == nil)
         #expect(proxyController.configurations.isEmpty)
     }
 
@@ -87,6 +92,7 @@ struct AppSettingsStoreTests {
                 == "Choose a forward source before enabling blocking."
         )
         #expect(store.activationNote == nil)
+        #expect(store.permissionSetupExplanation == nil)
     }
 
     @Test
@@ -130,7 +136,30 @@ struct AppSettingsStoreTests {
         #expect(store.blockingRequested)
         #expect(store.proxyStatus == .inputMonitoringDenied)
         #expect(store.shouldOfferRelaunchToFinishEnable)
+        #expect(store.permissionSetupExplanation == expectedPermissionSetupExplanation)
         #expect(proxyController.configurations.last?.enabled == true)
+    }
+
+    @Test
+    func enablingWithMusicAutomationDeniedShowsPermissionExplanation() async {
+        let defaults = makeDefaults()
+        let proxyController = MockProxyController()
+        proxyController.appliedStatus = .musicAutomationDenied
+
+        let store = AppSettingsStore(
+            defaults: defaults,
+            proxyController: proxyController,
+            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
+        )
+
+        store.setBlockingRequested(true)
+        await Task.yield()
+
+        #expect(!store.blockingEnabled)
+        #expect(store.blockingRequested)
+        #expect(store.proxyStatus == .musicAutomationDenied)
+        #expect(store.shouldOfferRelaunchToFinishEnable)
+        #expect(store.permissionSetupExplanation == expectedPermissionSetupExplanation)
     }
 
     @Test
@@ -152,6 +181,7 @@ struct AppSettingsStoreTests {
         #expect(store.blockingRequested)
         #expect(store.blockingStatusSummary == nil)
         #expect(!store.shouldOfferRelaunchToFinishEnable)
+        #expect(store.permissionSetupExplanation == nil)
     }
 
     @Test
@@ -269,6 +299,7 @@ struct AppSettingsStoreTests {
         #expect(store.blockingRequested)
         #expect(store.shouldOfferRelaunchToFinishEnable)
         #expect(store.blockingStatusSummary == nil)
+        #expect(store.permissionSetupExplanation == expectedPermissionSetupExplanation)
     }
 
     @Test

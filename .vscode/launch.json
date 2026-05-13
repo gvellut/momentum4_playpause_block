@@ -13,29 +13,6 @@
         {
             "type": "swift",
             "request": "launch",
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Debug Momentum4PlayPauseBlockCLI Any HID",
-            "target": "Momentum4PlayPauseBlockCLI",
-            "configuration": "debug",
-            "args": [
-                "--forward-source",
-                "any-hid"
-            ],
-            "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockCLI"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Release Momentum4PlayPauseBlock",
-            "target": "Momentum4PlayPauseBlock",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlock"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:momentum4_playpause_block}",
             "name": "Debug Momentum4PlayPauseBlockCLI",
@@ -48,30 +25,10 @@
             "request": "launch",
             "args": [],
             "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Release Momentum4PlayPauseBlockCLI",
-            "target": "Momentum4PlayPauseBlockCLI",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockCLI"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
             "name": "Debug Momentum4PlayPauseBlockDiagCLI",
             "target": "Momentum4PlayPauseBlockDiagCLI",
             "configuration": "debug",
             "preLaunchTask": "swift: Build Debug Momentum4PlayPauseBlockDiagCLI"
-        },
-        {
-            "type": "swift",
-            "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:momentum4_playpause_block}",
-            "name": "Release Momentum4PlayPauseBlockDiagCLI",
-            "target": "Momentum4PlayPauseBlockDiagCLI",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release Momentum4PlayPauseBlockDiagCLI"
         }
     ]
 }

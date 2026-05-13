@@ -1,0 +1,2 @@
+On first launch, when enabling block and the persmissions are not set, you should add an explanation (label) of what needs to be done below the buttons Open settings and Relaunch app.
+there are 2 persmission required : the input monitoring (requires relaunch) + the control Apple Music part

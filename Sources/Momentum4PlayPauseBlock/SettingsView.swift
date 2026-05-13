@@ -38,15 +38,24 @@ struct SettingsView: View {
                 }
 
                 if settingsStore.shouldShowPermissionActions {
-                    HStack(spacing: 10) {
-                        Button(systemSettingsButtonTitle) {
-                            openRelevantSystemSettings()
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Button(systemSettingsButtonTitle) {
+                                openRelevantSystemSettings()
+                            }
+
+                            if settingsStore.shouldOfferRelaunchToFinishEnable {
+                                Button("Relaunch App") {
+                                    appActions.relaunchApplication()
+                                }
+                            }
                         }
 
-                        if settingsStore.shouldOfferRelaunchToFinishEnable {
-                            Button("Relaunch App") {
-                                appActions.relaunchApplication()
-                            }
+                        if let permissionSetupExplanation = settingsStore.permissionSetupExplanation {
+                            Text(permissionSetupExplanation)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }

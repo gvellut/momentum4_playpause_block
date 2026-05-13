@@ -1,3 +1,4 @@
+* [Add explanation on startup](A_tasks/I_Add_explanation_on_startup.md)
 ! [Initialization](A_tasks/A_Initialization.md)
     !? [cli](A_tasks/A.A_cli.md)
     !? [Id not found](A_tasks/A.B_Id_not_found.md)

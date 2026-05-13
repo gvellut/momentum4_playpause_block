@@ -5,6 +5,9 @@ import OSLog
 @MainActor
 public final class AppSettingsStore: ObservableObject {
     private static let ownershipPollInterval: TimeInterval = 15
+    private static let permissionSetupExplanationText =
+        "To finish setup: allow Input Monitoring for this app, then relaunch it. "
+        + "After relaunch, if Input Monitoring is enabled, macOS will ask you to allow Automation control of Apple Music so approved play/pause presses can be forwarded."
 
     @Published public private(set) var blockingEnabled: Bool
     @Published public private(set) var blockingRequested: Bool
@@ -98,6 +101,14 @@ public final class AppSettingsStore: ObservableObject {
         case .disabled, .requestingPermissions, .active, .error:
             return shouldOfferRelaunchToFinishEnable
         }
+    }
+
+    public var permissionSetupExplanation: String? {
+        guard blockingRequested, shouldShowPermissionActions, !blockingEnabled else {
+            return nil
+        }
+
+        return Self.permissionSetupExplanationText
     }
 
     public var blockingStatusSummary: String? {

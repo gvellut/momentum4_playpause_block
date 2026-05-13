@@ -44,6 +44,7 @@ The supported path needs:
   Needed so the app can observe HID play/pause presses.
 - `Automation` for `Music`
   Needed because the approved play/pause command is forwarded to Apple Music through AppleScript.
+  use `tccutil reset AppleEvents` to clear the list (not possible to simply remove a single entry)
 
 Enable blocking from Settings to trigger the permission flow. On some systems macOS may still require one relaunch after both permissions are granted.
 
