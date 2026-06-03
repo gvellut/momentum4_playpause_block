@@ -9,6 +9,7 @@ protocol HIDEnvironment: AnyObject {
     func requestListenAccess() -> Bool
     func openManager() -> IOReturn
     func closeManager()
+    func resetManager()
     func currentDevices() -> [HIDDeviceControlling]
 }
 
@@ -28,26 +29,12 @@ protocol HIDDeviceControlling: AnyObject {
 final class SystemHIDEnvironment: HIDEnvironment {
     var devicesDidChange: (() -> Void)?
 
-    private let manager: IOHIDManager
+    private var manager: IOHIDManager
     private var devicesByIdentity: [ObjectIdentifier: SystemHIDDevice] = [:]
 
     init() {
         manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-
-        let matchingDictionaries: [[String: Any]] = [
-            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Consumer)],
-            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Telephony)],
-            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_GenericDesktop)],
-        ]
-
-        IOHIDManagerSetDeviceMatchingMultiple(manager, matchingDictionaries as CFArray)
-
-        let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        IOHIDManagerRegisterDeviceMatchingCallback(manager, Self.deviceMatchingCallback, context)
-        IOHIDManagerRegisterDeviceRemovalCallback(manager, Self.deviceRemovalCallback, context)
-        IOHIDManagerScheduleWithRunLoop(
-            manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue
-        )
+        configureManager()
     }
 
     func checkListenAccess() -> IOHIDAccessType {
@@ -66,6 +53,23 @@ final class SystemHIDEnvironment: HIDEnvironment {
         IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
     }
 
+    func resetManager() {
+        for device in devicesByIdentity.values {
+            device.prepareForRemoval()
+        }
+        devicesByIdentity.removeAll(keepingCapacity: false)
+
+        IOHIDManagerUnscheduleFromRunLoop(
+            manager,
+            CFRunLoopGetMain(),
+            CFRunLoopMode.defaultMode.rawValue
+        )
+        IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+
+        manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        configureManager()
+    }
+
     func currentDevices() -> [HIDDeviceControlling] {
         guard let rawDevices = IOHIDManagerCopyDevices(manager) else {
             return []
@@ -75,6 +79,23 @@ final class SystemHIDEnvironment: HIDEnvironment {
             let device = rawDevice as! IOHIDDevice
             return cachedDevice(for: device)
         }
+    }
+
+    private func configureManager() {
+        let matchingDictionaries: [[String: Any]] = [
+            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Consumer)],
+            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_Telephony)],
+            [kIOHIDDeviceUsagePageKey: Int(kHIDPage_GenericDesktop)],
+        ]
+
+        IOHIDManagerSetDeviceMatchingMultiple(manager, matchingDictionaries as CFArray)
+
+        let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        IOHIDManagerRegisterDeviceMatchingCallback(manager, Self.deviceMatchingCallback, context)
+        IOHIDManagerRegisterDeviceRemovalCallback(manager, Self.deviceRemovalCallback, context)
+        IOHIDManagerScheduleWithRunLoop(
+            manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue
+        )
     }
 
     private func cachedDevice(for device: IOHIDDevice) -> SystemHIDDevice {

@@ -1,0 +1,3 @@
+After waking up from sleep, issue.
+When I oppen the Preference panel (left click, Preferences on the menubar icon), then close the window, the icon transforms into a empty circle and the interception is disabled. Nothing in the logs . When I repoen the Preferences window, the Enable Block is checked. I can disable then enable it again to have the icon become full (but it does not intercept the events from the headset). Also the Play Pause from the keyboard (which should be passed through : forward Sources All HID), are not passed throug. There was a log for that but it disappeared when I relaunched.
+Find out the cause.

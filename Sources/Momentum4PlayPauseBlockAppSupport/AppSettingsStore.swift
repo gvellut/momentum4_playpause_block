@@ -308,19 +308,6 @@ public final class AppSettingsStore: ObservableObject {
         launchAtLoginController.openSystemSettings()
     }
 
-    public func restartBlockingIfRequestedForRuntimeModeChange() {
-        guard blockingRequested else {
-            return
-        }
-
-        proxyController.apply(
-            configuration: appProxyConfiguration(
-                enabled: false
-            )
-        )
-        applyProxyConfiguration()
-    }
-
     private func applyCapturedForwardSourceProductName(_ productName: String) {
         suppressSideEffects = true
         allowedForwardSourceMode = .specificProductName

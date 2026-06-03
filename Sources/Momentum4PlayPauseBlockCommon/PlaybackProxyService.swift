@@ -425,6 +425,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private let forwardSourceCorrelationWindow: TimeInterval
     private let ownershipReclaimCooldown: TimeInterval
     private let sleepWakeResumeDelay: TimeInterval
+    private let hidResetRetryDelay: TimeInterval
 
     private var configuration = PlaybackProxyConfiguration(enabled: false)
     private var observedDeviceSessions: [io_service_t: ObservedDeviceSession] = [:]
@@ -443,6 +444,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     private var sleepSuspensionReasons: Set<PlaybackProxySleepSuspensionReason> = []
     private var sleepWakeResumeTask: Task<Void, Never>?
     private var hidObservationOpenFailures: [io_service_t: HIDObservationOpenFailure] = [:]
+    private var hidResetRetryTask: Task<Void, Never>?
+    private var serviceIDsWithInvalidOpenResetAttempt: Set<io_service_t> = []
 
     public convenience init() {
         self.init(
@@ -462,7 +465,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         ownershipRecoveryDelays: [TimeInterval] = [0.08, 0.25, 0.6],
         forwardSourceCorrelationWindow: TimeInterval = 0.15,
         ownershipReclaimCooldown: TimeInterval = 1,
-        sleepWakeResumeDelay: TimeInterval = 2
+        sleepWakeResumeDelay: TimeInterval = 2,
+        hidResetRetryDelay: TimeInterval = 0.25
     ) {
         self.hidEnvironment = hidEnvironment
         self.appleMusicController = appleMusicController
@@ -472,6 +476,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         self.forwardSourceCorrelationWindow = forwardSourceCorrelationWindow
         self.ownershipReclaimCooldown = ownershipReclaimCooldown
         self.sleepWakeResumeDelay = max(0, sleepWakeResumeDelay)
+        self.hidResetRetryDelay = max(0, hidResetRetryDelay)
 
         hidEnvironment.devicesDidChange = { [weak self] in
             Task { @MainActor in
@@ -493,8 +498,10 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             pendingForwardSourcePress = nil
             lastOwnershipReclaimAt = nil
             hidObservationOpenFailures.removeAll(keepingCapacity: false)
+            serviceIDsWithInvalidOpenResetAttempt.removeAll(keepingCapacity: false)
             clearSleepSuspensionState()
             cancelPendingForwardSourceTimeout()
+            cancelHIDResetRetry()
         }
 
         reconcileState()
@@ -768,7 +775,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         cancelSleepWakeResumeTask()
         sleepSuspensionReasons.insert(reason)
         stopProxyIfNeeded()
-        releaseAllObservedDevices()
+        cancelHIDResetRetry()
+        resetHIDManager(clearInvalidOpenResetAttempts: true)
     }
 
     private func endSleepSuspension(
@@ -813,6 +821,11 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             return
         }
 
+        guard openManagerIfNeeded() else {
+            publishStatus(.error("The HID manager could not be opened after wake."))
+            return
+        }
+
         refreshObservedDevices()
 
         if reclaimProxyOwnership(
@@ -846,6 +859,9 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         for serviceID in Set(hidObservationOpenFailures.keys).subtracting(desiredServiceIDs) {
             hidObservationOpenFailures[serviceID] = nil
         }
+        let resetAttemptsForRemovedDevices =
+            serviceIDsWithInvalidOpenResetAttempt.subtracting(desiredServiceIDs)
+        serviceIDsWithInvalidOpenResetAttempt.subtract(resetAttemptsForRemovedDevices)
 
         for serviceID in Set(observedDeviceSessions.keys).subtracting(desiredServiceIDs) {
             releaseObservedDevice(serviceID: serviceID)
@@ -907,10 +923,15 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             device.setInputValueHandler(nil)
             device.unscheduleFromMainRunLoop()
             emitHIDObservationOpenFailureIfNeeded(device: device, openResult: openResult)
+            scheduleHIDResetRetryIfNeeded(
+                serviceID: device.serviceID,
+                openResult: openResult
+            )
             return
         }
 
         hidObservationOpenFailures[device.serviceID] = nil
+        serviceIDsWithInvalidOpenResetAttempt.remove(device.serviceID)
         observedDeviceSessions[device.serviceID] = ObservedDeviceSession(
             device: device,
             serviceID: device.serviceID,
@@ -932,6 +953,72 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         for serviceID in Array(observedDeviceSessions.keys) {
             releaseObservedDevice(serviceID: serviceID)
         }
+    }
+
+    private func resetHIDManager(clearInvalidOpenResetAttempts: Bool) {
+        releaseAllObservedDevices()
+        hidObservationOpenFailures.removeAll(keepingCapacity: false)
+        if clearInvalidOpenResetAttempts {
+            serviceIDsWithInvalidOpenResetAttempt.removeAll(keepingCapacity: false)
+        }
+        hidEnvironment.resetManager()
+        managerIsOpen = false
+    }
+
+    private func scheduleHIDResetRetryIfNeeded(
+        serviceID: io_service_t,
+        openResult: IOReturn
+    ) {
+        guard isInvalidHIDDeviceOpenResult(openResult) else {
+            return
+        }
+
+        guard !serviceIDsWithInvalidOpenResetAttempt.contains(serviceID) else {
+            return
+        }
+
+        serviceIDsWithInvalidOpenResetAttempt.insert(serviceID)
+
+        guard hidResetRetryTask == nil else {
+            return
+        }
+
+        let retryDelay = hidResetRetryDelay
+        hidResetRetryTask = Task { @MainActor [weak self] in
+            if retryDelay > 0 {
+                try? await Task.sleep(
+                    nanoseconds: UInt64(retryDelay * 1_000_000_000)
+                )
+            } else {
+                await Task.yield()
+            }
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.retryAfterInvalidHIDOpenFailure()
+        }
+    }
+
+    private func retryAfterInvalidHIDOpenFailure() {
+        hidResetRetryTask = nil
+
+        guard configuration.enabled || sourceCaptureIsActive else {
+            return
+        }
+
+        resetHIDManager(clearInvalidOpenResetAttempts: false)
+        reconcileState()
+    }
+
+    private func cancelHIDResetRetry() {
+        hidResetRetryTask?.cancel()
+        hidResetRetryTask = nil
+    }
+
+    private func isInvalidHIDDeviceOpenResult(_ result: IOReturn) -> Bool {
+        result == kIOReturnBadArgument || result == kIOReturnNoDevice
     }
 
     private func emitHIDObservationOpenFailureIfNeeded(

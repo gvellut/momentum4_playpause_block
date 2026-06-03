@@ -303,32 +303,6 @@ struct AppSettingsStoreTests {
     }
 
     @Test
-    func restartBlockingIfRequestedReappliesProxyAfterRuntimeModeChange() async {
-        let defaults = makeDefaults()
-        let proxyController = MockProxyController()
-        proxyController.appliedStatus = .active("all HID sources")
-
-        let store = AppSettingsStore(
-            defaults: defaults,
-            proxyController: proxyController,
-            launchAtLoginController: MockLaunchAtLoginController(status: .disabled)
-        )
-
-        store.setBlockingRequested(true)
-        await Task.yield()
-
-        proxyController.appliedStatus = nil
-        store.restartBlockingIfRequestedForRuntimeModeChange()
-
-        #expect(proxyController.configurations.suffix(2).map(\.enabled) == [false, true])
-        #expect(
-            proxyController.configurations.suffix(2).allSatisfy {
-                $0.eventDrivenReclaimEnabled && $0.pollInterval == 15
-            }
-        )
-    }
-
-    @Test
     func openAtLoginRequestsAreStillForwardedToController() {
         let defaults = makeDefaults()
         let launchController = MockLaunchAtLoginController(status: .disabled)

@@ -91,7 +91,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         AppRuntime.sharedStore.cancelForwardSourceCapture()
         settingsWindowController = nil
         setBackgroundActivationPolicy()
-        AppRuntime.sharedStore.restartBlockingIfRequestedForRuntimeModeChange()
     }
 
     private func openSettingsLater() {

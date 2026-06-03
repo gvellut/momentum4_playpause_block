@@ -488,6 +488,7 @@ struct PlaybackProxyServiceTests {
         #expect(runtime.startCalls == 1)
         #expect(device.openCalls == 1)
         #expect(!device.isObservingInput)
+        #expect(environment.resetManagerCalls == 0)
         #expect(
             diagnostics.contains(
                 .hidObservationOpenFailed(
@@ -654,6 +655,7 @@ struct PlaybackProxyServiceTests {
         ownershipMonitor.trigger(.screensDidWake)
         try? await Task.sleep(for: .milliseconds(20))
 
+        #expect(environment.resetManagerCalls == 1)
         #expect(device.openCalls == 2)
         #expect(device.isObservingInput)
         #expect(firstRuntime.stopCalls == 1)
@@ -696,10 +698,46 @@ struct PlaybackProxyServiceTests {
         ownershipMonitor.trigger(.screensDidWake)
         try? await Task.sleep(for: .milliseconds(20))
 
+        #expect(environment.resetManagerCalls == 1)
         #expect(device.openCalls == 2)
         #expect(device.isObservingInput)
         #expect(firstRuntime.stopCalls == 1)
         #expect(secondRuntime.startCalls == 1)
+    }
+
+    @Test
+    func invalidHIDOpenFailureResetsManagerAndRetriesWithFreshDevice() async {
+        let environment = FakeHIDEnvironment()
+        let staleDevice = FakeHIDDevice(serviceID: 24, snapshot: .keyboard(product: "Keychron K1 Pro"))
+        staleDevice.openResult = kIOReturnBadArgument
+        let replacementDevice = FakeHIDDevice(
+            serviceID: 24,
+            snapshot: .keyboard(product: "Keychron K1 Pro")
+        )
+        environment.devices = [staleDevice]
+        environment.resetManagerHandler = {
+            environment.devices = [replacementDevice]
+        }
+        let service = makeService(
+            environment: environment,
+            appleMusic: FakeAppleMusicController(),
+            runtime: FakeNowPlayingProxyRuntime(),
+            hidResetRetryDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID
+            )
+        )
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(staleDevice.openCalls == 1)
+        #expect(!staleDevice.isObservingInput)
+        #expect(environment.resetManagerCalls == 1)
+        #expect(replacementDevice.openCalls == 1)
+        #expect(replacementDevice.isObservingInput)
     }
 
     @Test
@@ -1094,7 +1132,8 @@ struct PlaybackProxyServiceTests {
         runtime: FakeNowPlayingProxyRuntime,
         ownershipMonitor: FakePlaybackProxyOwnershipMonitor = FakePlaybackProxyOwnershipMonitor(),
         forwardSourceCorrelationWindow: TimeInterval = 0.15,
-        ownershipReclaimCooldown: TimeInterval = 1
+        ownershipReclaimCooldown: TimeInterval = 1,
+        hidResetRetryDelay: TimeInterval = 0.25
     ) -> PlaybackProxyService {
         PlaybackProxyService(
             hidEnvironment: environment,
@@ -1103,7 +1142,8 @@ struct PlaybackProxyServiceTests {
             ownershipMonitorFactory: { ownershipMonitor },
             ownershipRecoveryDelays: [0.001, 0.002],
             forwardSourceCorrelationWindow: forwardSourceCorrelationWindow,
-            ownershipReclaimCooldown: ownershipReclaimCooldown
+            ownershipReclaimCooldown: ownershipReclaimCooldown,
+            hidResetRetryDelay: hidResetRetryDelay
         )
     }
 }
@@ -1182,6 +1222,8 @@ private final class FakeHIDEnvironment: HIDEnvironment {
     var requestAccessResult = true
     var openManagerResult: IOReturn = kIOReturnSuccess
     var devices: [HIDDeviceControlling] = []
+    var resetManagerHandler: (() -> Void)?
+    private(set) var resetManagerCalls = 0
 
     func checkListenAccess() -> IOHIDAccessType {
         accessType
@@ -1196,6 +1238,11 @@ private final class FakeHIDEnvironment: HIDEnvironment {
     }
 
     func closeManager() {}
+
+    func resetManager() {
+        resetManagerCalls += 1
+        resetManagerHandler?()
+    }
 
     func currentDevices() -> [HIDDeviceControlling] {
         devices
