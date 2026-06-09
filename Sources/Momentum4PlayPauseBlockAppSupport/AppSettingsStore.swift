@@ -340,9 +340,13 @@ public final class AppSettingsStore: ObservableObject {
         case .active:
             setBlockingRequestedWithoutSideEffects(true)
             setBlockingEnabledWithoutSideEffects(true)
-            defaults.set(true, forKey: AppSettingsKeys.blockingEnabled)
+            if defaults.object(forKey: AppSettingsKeys.blockingEnabled) as? Bool != true {
+                defaults.set(true, forKey: AppSettingsKeys.blockingEnabled)
+            }
             pendingEnableAfterRelaunch = false
-            defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            if defaults.object(forKey: AppSettingsKeys.pendingEnableAfterRelaunch) as? Bool == true {
+                defaults.set(false, forKey: AppSettingsKeys.pendingEnableAfterRelaunch)
+            }
             lastActivationFailure = nil
         case .disabled:
             setBlockingEnabledWithoutSideEffects(false)

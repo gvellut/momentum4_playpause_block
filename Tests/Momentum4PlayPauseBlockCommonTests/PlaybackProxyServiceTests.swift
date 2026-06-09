@@ -239,6 +239,7 @@ struct PlaybackProxyServiceTests {
         let secondRuntime = FakeNowPlayingProxyRuntime()
         var runtimes = [firstRuntime, secondRuntime]
         var diagnostics: [PlaybackProxyDiagnosticEvent] = []
+        var statuses: [PlaybackProxyStatus] = []
 
         let service = PlaybackProxyService(
             hidEnvironment: FakeHIDEnvironment(),
@@ -249,6 +250,7 @@ struct PlaybackProxyServiceTests {
             ownershipReclaimCooldown: 0.05
         )
         service.diagnosticDidEmit = { diagnostics.append($0) }
+        service.statusDidChange = { statuses.append($0) }
 
         service.apply(
             configuration: PlaybackProxyConfiguration(
@@ -274,6 +276,7 @@ struct PlaybackProxyServiceTests {
         #expect(diagnostics.contains(.timedBackstopTick(15)))
         #expect(diagnostics.contains(.ownershipReclaimStarted(.timedBackstopTick(15))))
         #expect(diagnostics.contains(.ownershipReclaimSucceeded(.timedBackstopTick(15))))
+        #expect(statuses.filter { $0 == .active("all HID sources") }.count == 2)
     }
 
     @Test
@@ -817,7 +820,9 @@ struct PlaybackProxyServiceTests {
             sleepWakeResumeDelay: 0.001
         )
         var diagnostics: [PlaybackProxyDiagnosticEvent] = []
+        var statuses: [PlaybackProxyStatus] = []
         service.diagnosticDidEmit = { diagnostics.append($0) }
+        service.statusDidChange = { statuses.append($0) }
 
         service.apply(
             configuration: PlaybackProxyConfiguration(
@@ -839,6 +844,7 @@ struct PlaybackProxyServiceTests {
         #expect(!diagnostics.contains(.ownershipReclaimStarted(.systemDidWake)))
         #expect(diagnostics.contains(.ownershipReclaimStarted(.screensDidWake)))
         #expect(diagnostics.contains(.ownershipReclaimSucceeded(.screensDidWake)))
+        #expect(statuses.filter { $0 == .active("all HID sources") }.count == 2)
     }
 
     @Test

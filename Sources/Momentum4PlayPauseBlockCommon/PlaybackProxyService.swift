@@ -597,7 +597,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
             if isSleepSuspended {
                 stopProxyIfNeeded()
-                publishStatus(.active(activeSourceDescription))
+                publishActiveStatus()
                 return
             }
 
@@ -609,7 +609,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
                 return
             }
 
-            publishStatus(.active(activeSourceDescription))
+            publishActiveStatus()
         } else {
             stopProxyIfNeeded()
             stopOwnershipMonitoringIfNeeded()
@@ -749,7 +749,11 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
         case .mediaRemoteNotification(let notificationName):
             emitDiagnostic(.mediaRemoteNotification(notificationName))
-            _ = refreshProxyOwnershipIfNeeded(reason: .mediaRemoteNotification(notificationName))
+            if refreshProxyOwnershipIfNeeded(reason: .mediaRemoteNotification(notificationName)),
+                !isSleepSuspended
+            {
+                publishActiveStatus(force: true)
+            }
 
         case .timedBackstopTick(let interval):
             emitDiagnostic(.timedBackstopTick(interval))
@@ -763,7 +767,9 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             }
 
             refreshObservedDevices()
-            _ = refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval))
+            if refreshProxyOwnershipIfNeeded(reason: .timedBackstopTick(interval)) {
+                publishActiveStatus(force: true)
+            }
         }
     }
 
@@ -833,7 +839,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             failureMessage: "The Apple Music proxy could not be restarted after wake.",
             respectsCooldown: false
         ) {
-            publishStatus(.active(activeSourceDescription))
+            publishActiveStatus(force: true)
         }
     }
 
@@ -1089,7 +1095,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
                 closeManagerIfNeeded()
                 publishStatus(.disabled)
             } else {
-                publishStatus(.active(activeSourceDescription))
+                publishActiveStatus()
             }
             return
         }
@@ -1128,7 +1134,7 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             failureMessage: "The Apple Music proxy could not be restarted after forwarding.",
             respectsCooldown: false
         ) {
-            publishStatus(.active(activeSourceDescription))
+            publishActiveStatus(force: true)
         }
     }
 
@@ -1262,8 +1268,8 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
             correlationWindow: self.forwardSourceCorrelationWindow
         )
         self.pendingForwardSourcePress = nil
-        if refreshProxyOwnershipIfNeeded(reason: reclaimReason) {
-            publishStatus(.active(activeSourceDescription))
+        if refreshProxyOwnershipIfNeeded(reason: reclaimReason), !isSleepSuspended {
+            publishActiveStatus(force: true)
         }
     }
 
@@ -1306,7 +1312,15 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
     }
 
     private func publishStatus(_ status: PlaybackProxyStatus) {
-        guard lastPublishedStatus != status else {
+        publishStatus(status, force: false)
+    }
+
+    private func publishActiveStatus(force: Bool = false) {
+        publishStatus(.active(activeSourceDescription), force: force)
+    }
+
+    private func publishStatus(_ status: PlaybackProxyStatus, force: Bool) {
+        guard force || lastPublishedStatus != status else {
             return
         }
 
