@@ -84,18 +84,27 @@ public enum PlaybackProxyStatus: Equatable, Sendable {
 
 public enum PlaybackProxyOwnershipReclaimReason: Equatable, Sendable {
     case forwardedCommand
+    case systemWillNotSleep
     case systemDidWake
     case screensDidWake
+    case screenDidUnlock
+    case screenSaverDidStop
     case mediaRemoteNotification(String)
     case timedBackstopTick(TimeInterval)
     case missingExpectedRemoteCommand(sourceLabel: String, correlationWindow: TimeInterval)
 }
 
 public enum PlaybackProxyDiagnosticEvent: Equatable, Sendable {
+    case systemCanSleep
     case systemWillSleep
+    case systemWillNotSleep
     case systemDidWake
     case screensDidSleep
     case screensDidWake
+    case screenDidLock
+    case screenDidUnlock
+    case screenSaverDidStart
+    case screenSaverDidStop
     case mediaRemoteNotification(String)
     case timedBackstopTick(TimeInterval)
     case hidObservationOpenFailed(
@@ -408,6 +417,8 @@ private struct HIDObservationOpenFailure: Equatable {
 private enum PlaybackProxySleepSuspensionReason: Hashable {
     case systemSleep
     case screensSleep
+    case screenLock
+    case screenSaver
 }
 
 @MainActor
@@ -731,9 +742,17 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
     private func handleOwnershipMonitorSignal(_ signal: PlaybackProxyOwnershipMonitorSignal) {
         switch signal {
+        case .systemCanSleep:
+            emitDiagnostic(.systemCanSleep)
+            beginSleepSuspension(reason: .systemSleep)
+
         case .systemWillSleep:
             emitDiagnostic(.systemWillSleep)
             beginSleepSuspension(reason: .systemSleep)
+
+        case .systemWillNotSleep:
+            emitDiagnostic(.systemWillNotSleep)
+            endSleepSuspension(reason: .systemSleep, reclaimReason: .systemWillNotSleep)
 
         case .systemDidWake:
             emitDiagnostic(.systemDidWake)
@@ -746,6 +765,22 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         case .screensDidWake:
             emitDiagnostic(.screensDidWake)
             endSleepSuspension(reason: .screensSleep, reclaimReason: .screensDidWake)
+
+        case .screenDidLock:
+            emitDiagnostic(.screenDidLock)
+            beginSleepSuspension(reason: .screenLock)
+
+        case .screenDidUnlock:
+            emitDiagnostic(.screenDidUnlock)
+            endSleepSuspension(reason: .screenLock, reclaimReason: .screenDidUnlock)
+
+        case .screenSaverDidStart:
+            emitDiagnostic(.screenSaverDidStart)
+            beginSleepSuspension(reason: .screenSaver)
+
+        case .screenSaverDidStop:
+            emitDiagnostic(.screenSaverDidStop)
+            endSleepSuspension(reason: .screenSaver, reclaimReason: .screenSaverDidStop)
 
         case .mediaRemoteNotification(let notificationName):
             emitDiagnostic(.mediaRemoteNotification(notificationName))
@@ -779,7 +814,11 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
 
     private func beginSleepSuspension(reason: PlaybackProxySleepSuspensionReason) {
         cancelSleepWakeResumeTask()
-        sleepSuspensionReasons.insert(reason)
+        let inserted = sleepSuspensionReasons.insert(reason).inserted
+        guard inserted else {
+            return
+        }
+
         stopProxyIfNeeded()
         cancelHIDResetRetry()
         resetHIDManager(clearInvalidOpenResetAttempts: true)
@@ -789,7 +828,9 @@ public final class PlaybackProxyService: PlaybackProxyControlling {
         reason: PlaybackProxySleepSuspensionReason,
         reclaimReason: PlaybackProxyOwnershipReclaimReason
     ) {
-        sleepSuspensionReasons.remove(reason)
+        guard sleepSuspensionReasons.remove(reason) != nil else {
+            return
+        }
 
         guard sleepSuspensionReasons.isEmpty else {
             return

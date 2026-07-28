@@ -887,6 +887,307 @@ struct PlaybackProxyServiceTests {
     }
 
     @Test
+    func idleSleepAttemptStopsProxyAndBackstopDoesNotRestartWhileSuspended() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+        var diagnostics: [PlaybackProxyDiagnosticEvent] = []
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+        service.diagnosticDidEmit = { diagnostics.append($0) }
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true,
+                pollInterval: 15
+            )
+        )
+        ownershipMonitor.trigger(.systemCanSleep)
+        ownershipMonitor.trigger(.timedBackstopTick(15))
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 0)
+        #expect(diagnostics.contains(.systemCanSleep))
+        #expect(
+            diagnostics.contains(
+                .ownershipReclaimSkippedSleepSuspended(.timedBackstopTick(15))
+            )
+        )
+    }
+
+    @Test
+    func cancelledIdleSleepAttemptResumesWhenNoOtherSuspensionRemains() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.systemCanSleep)
+        ownershipMonitor.trigger(.systemWillNotSleep)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+        #expect(secondRuntime.reassertNowPlayingStateCalls > 0)
+    }
+
+    @Test
+    func lockKeepsProxyStoppedUntilUnlockEvenAfterWakeSignals() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.screenDidLock)
+        ownershipMonitor.trigger(.systemDidWake)
+        ownershipMonitor.trigger(.screensDidWake)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 0)
+
+        ownershipMonitor.trigger(.screenDidUnlock)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(secondRuntime.startCalls == 1)
+    }
+
+    @Test
+    func unlockResumesAfterWakeWhenBlockingStillEnabled() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.screenDidLock)
+        ownershipMonitor.trigger(.systemCanSleep)
+        ownershipMonitor.trigger(.screensDidSleep)
+        ownershipMonitor.trigger(.systemDidWake)
+        ownershipMonitor.trigger(.screensDidWake)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 0)
+
+        ownershipMonitor.trigger(.screenDidUnlock)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(secondRuntime.startCalls == 1)
+    }
+
+    @Test
+    func disablingWhileLockedPreventsUnlockRestart() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.screenDidLock)
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: false,
+                allowedForwardSourceMode: .anyHID
+            )
+        )
+        ownershipMonitor.trigger(.screenDidUnlock)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 0)
+    }
+
+    @Test
+    func screenSaverStopDoesNotResumeUntilLockAlsoClears() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.screenSaverDidStart)
+        ownershipMonitor.trigger(.screenDidLock)
+        ownershipMonitor.trigger(.screenSaverDidStop)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 0)
+
+        ownershipMonitor.trigger(.screenDidUnlock)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(secondRuntime.startCalls == 1)
+    }
+
+    @Test
+    func screenSaverStopResumesWhenNoOtherSuspensionRemains() async {
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: FakeHIDEnvironment(),
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.screenSaverDidStart)
+        ownershipMonitor.trigger(.screenSaverDidStop)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(secondRuntime.startCalls == 1)
+    }
+
+    @Test
+    func duplicateSleepSignalsDoNotCauseExtraStopsOrRestarts() async {
+        let environment = FakeHIDEnvironment()
+        let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
+        let firstRuntime = FakeNowPlayingProxyRuntime()
+        let secondRuntime = FakeNowPlayingProxyRuntime()
+        let thirdRuntime = FakeNowPlayingProxyRuntime()
+        var runtimes = [firstRuntime, secondRuntime, thirdRuntime]
+
+        let service = PlaybackProxyService(
+            hidEnvironment: environment,
+            appleMusicController: FakeAppleMusicController(),
+            proxyFactory: { runtimes.removeFirst() },
+            ownershipMonitorFactory: { ownershipMonitor },
+            ownershipRecoveryDelays: [0.001, 0.002],
+            ownershipReclaimCooldown: 0.05,
+            sleepWakeResumeDelay: 0.001
+        )
+
+        service.apply(
+            configuration: PlaybackProxyConfiguration(
+                enabled: true,
+                allowedForwardSourceMode: .anyHID,
+                eventDrivenReclaimEnabled: true
+            )
+        )
+        ownershipMonitor.trigger(.screensDidSleep)
+        ownershipMonitor.trigger(.screensDidSleep)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(firstRuntime.stopCalls == 1)
+        #expect(environment.resetManagerCalls == 1)
+        #expect(secondRuntime.startCalls == 0)
+
+        ownershipMonitor.trigger(.screensDidWake)
+        ownershipMonitor.trigger(.screensDidWake)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(secondRuntime.startCalls == 1)
+        #expect(thirdRuntime.startCalls == 0)
+    }
+
+    @Test
     func overlappingSleepReasonsResumeOnlyAfterAllWakeSignals() async {
         let ownershipMonitor = FakePlaybackProxyOwnershipMonitor()
         let firstRuntime = FakeNowPlayingProxyRuntime()

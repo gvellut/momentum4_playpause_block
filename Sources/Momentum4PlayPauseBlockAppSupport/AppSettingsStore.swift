@@ -461,10 +461,16 @@ private enum PlaybackProxyConsoleLogger {
             logger.error("\(message, privacy: .public)")
         case .hidObservationOpenFailed:
             logger.warning("\(message, privacy: .public)")
-        case .systemWillSleep,
+        case .systemCanSleep,
+            .systemWillSleep,
+            .systemWillNotSleep,
             .systemDidWake,
             .screensDidSleep,
             .screensDidWake,
+            .screenDidLock,
+            .screenDidUnlock,
+            .screenSaverDidStart,
+            .screenSaverDidStop,
             .mediaRemoteNotification,
             .timedBackstopTick,
             .ownershipReclaimStarted,
@@ -477,14 +483,26 @@ private enum PlaybackProxyConsoleLogger {
 
     private static func message(for event: PlaybackProxyDiagnosticEvent) -> String {
         switch event {
+        case .systemCanSleep:
+            return "system can sleep"
         case .systemWillSleep:
             return "system will sleep"
+        case .systemWillNotSleep:
+            return "system will not sleep"
         case .systemDidWake:
             return "system did wake"
         case .screensDidSleep:
             return "screens did sleep"
         case .screensDidWake:
             return "screens did wake"
+        case .screenDidLock:
+            return "screen did lock"
+        case .screenDidUnlock:
+            return "screen did unlock"
+        case .screenSaverDidStart:
+            return "screensaver did start"
+        case .screenSaverDidStop:
+            return "screensaver did stop"
         case .mediaRemoteNotification(let notificationName):
             return "mediaremote notification \(notificationName)"
         case .timedBackstopTick(let interval):
@@ -514,10 +532,16 @@ private enum PlaybackProxyConsoleLogger {
         switch reason {
         case .forwardedCommand:
             return "post-forward reclaim"
+        case .systemWillNotSleep:
+            return "system will not sleep"
         case .systemDidWake:
             return "system wake"
         case .screensDidWake:
             return "screens wake"
+        case .screenDidUnlock:
+            return "screen unlock"
+        case .screenSaverDidStop:
+            return "screensaver stop"
         case .mediaRemoteNotification(let notificationName):
             return "mediaremote notification \(notificationName)"
         case .timedBackstopTick(let interval):
